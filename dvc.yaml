@@ -1,0 +1,116 @@
+# ============================================================
+# DVC Pipeline Definition — IR MLOps
+# ============================================================
+# Run the entire pipeline with:   dvc repro
+# Check what's stale with:        dvc status
+# Visualize the DAG with:         dvc dag
+# ============================================================
+
+stages:
+  # ──────────────────────────────────────────────────────────
+  # STAGE 1: Simulate
+  # Generates synthetic noisy IR sensor images.
+  # ──────────────────────────────────────────────────────────
+  simulate:
+    cmd: .\venv\python.exe src/simulate_dataset.py
+    deps:
+      - src/simulate_dataset.py # If this script changes → re-run
+    params:
+      - params.yaml: # If any of these keys change → re-run
+          - base.random_state
+          - base.image_width
+          - base.image_height
+          - base.bit_depth
+          - simulate.num_images
+          - simulate.bad_pixel_ratio
+          - simulate.sensor_temp
+    outs:
+      - data/raw
+      - data/clean # DVC tracks this folder's contents
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 2: Calibrate
+  # Applies BPR and NUC to the raw images.
+  # Depends on Stage 1's output → will always run after simulate.
+  # ──────────────────────────────────────────────────────────
+  calibrate:
+    cmd: .\venv\python.exe src/calibrate.py
+    deps:
+      - src/calibrate.py
+      - data/raw # Depends on Stage 1's output folder
+    params:
+      - params.yaml:
+          - calibrate.bpr_window_size
+          - calibrate.nuc_target_mean
+    outs:
+      - data/interim/calibrated
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 3: Process
+  # Applies CLAHE and denoising to calibrated images.
+  # Depends on Stage 2's output → runs after calibrate.
+  # ──────────────────────────────────────────────────────────
+  process:
+    cmd: .\venv\python.exe src/process.py
+    deps:
+      - src/process.py
+      - data/interim/calibrated # Depends on Stage 2's output folder
+    params:
+      - params.yaml:
+          - process.clahe_clip_limit
+          - process.clahe_grid_size
+          - process.denoise_weight
+    outs:
+      - data/processed/deterministic
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 4: AI Enhancement (Deep Learning)
+  # Trains/runs the PyTorch CNN to denoise and enhance contrast.
+  # ──────────────────────────────────────────────────────────
+  enhance:
+    cmd: .\venv\python.exe src/enhance.py
+    deps:
+      - src/enhance.py
+      - data/raw
+      - data/clean
+    params:
+      - params.yaml:
+        - train.learning_rate
+        - train.batch_size
+        - train.epochs
+        - train.model_save_path
+    outs:
+      - models/enhancement_cnn.pth
+      - data/processed/dl
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 5: Object Detection (YOLO)
+  # Runs YOLOv8 inference to find targets in DL-enhanced images.
+  # ──────────────────────────────────────────────────────────
+  detect:
+    cmd: .\venv\python.exe src/detect.py
+    deps:
+      - src/detect.py
+      - data/processed/dl
+    outs:
+      - data/processed/detected
+
+  # ──────────────────────────────────────────────────────────
+  # STAGE 6: Evaluate
+  # Compares raw vs processed images using PSNR & SSIM.
+  # 'metrics' tells DVC this JSON is a metric file — it can
+  # then be compared across runs with 'dvc metrics diff'.
+  # ──────────────────────────────────────────────────────────
+  evaluate:
+    cmd: .\venv\python.exe src/evaluate.py
+    deps:
+      - src/evaluate.py
+      - data/raw
+      - data/processed/deterministic
+    params:
+      - params.yaml:
+        - base.bit_depth
+        - evaluate.metrics
+    metrics:
+      - metrics/evaluation.json:
+          cache: false

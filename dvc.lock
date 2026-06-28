@@ -1,0 +1,155 @@
+schema: '2.0'
+stages:
+  simulate:
+    cmd: .\venv\python.exe src/simulate_dataset.py
+    deps:
+    - path: src/simulate_dataset.py
+      hash: md5
+      md5: d21b80c6ca82e185fd1b268a75461b05
+      size: 3749
+    params:
+      params.yaml:
+        base.bit_depth: 14
+        base.image_height: 480
+        base.image_width: 640
+        base.random_state: 42
+        simulate.bad_pixel_ratio: 0.005
+        simulate.num_images: 25
+        simulate.sensor_temp: 77.0
+    outs:
+    - path: data/clean
+      hash: md5
+      md5: 24474b3bd15e5630e322f30ca13eb5e9.dir
+      size: 6376794
+      nfiles: 25
+    - path: data/raw
+      hash: md5
+      md5: e59c1fad0a8c34d87c8c7a20a5316573.dir
+      size: 17068806
+      nfiles: 25
+  calibrate:
+    cmd: .\venv\python.exe src/calibrate.py
+    deps:
+    - path: data/raw
+      hash: md5
+      md5: e59c1fad0a8c34d87c8c7a20a5316573.dir
+      size: 17068806
+      nfiles: 25
+    - path: src/calibrate.py
+      hash: md5
+      md5: b541a19279ce4263a2a44e629d4c072d
+      size: 4006
+    params:
+      params.yaml:
+        calibrate.bpr_window_size: 3
+        calibrate.nuc_target_mean: 8000
+    outs:
+    - path: data/interim/calibrated
+      hash: md5
+      md5: e9e94f62e94807e7a21f64b7c7a1755d.dir
+      size: 16829870
+      nfiles: 25
+  process:
+    cmd: .\venv\python.exe src/process.py
+    deps:
+    - path: data/interim/calibrated
+      hash: md5
+      md5: e9e94f62e94807e7a21f64b7c7a1755d.dir
+      size: 16829870
+      nfiles: 25
+    - path: src/process.py
+      hash: md5
+      md5: 6a392a0d52485ce3505c8c867edd9641
+      size: 3990
+    params:
+      params.yaml:
+        process.clahe_clip_limit: 2.0
+        process.clahe_grid_size:
+        - 8
+        - 8
+        process.denoise_weight: 0.1
+    outs:
+    - path: data/processed/deterministic
+      hash: md5
+      md5: 40b3c850b8015a775631494b3520f23b.dir
+      size: 11227740
+      nfiles: 25
+  enhance:
+    cmd: .\venv\python.exe src/enhance.py
+    deps:
+    - path: data/clean
+      hash: md5
+      md5: 24474b3bd15e5630e322f30ca13eb5e9.dir
+      size: 6376794
+      nfiles: 25
+    - path: data/raw
+      hash: md5
+      md5: e59c1fad0a8c34d87c8c7a20a5316573.dir
+      size: 17068806
+      nfiles: 25
+    - path: src/enhance.py
+      hash: md5
+      md5: 6e0ee8c0614cd345811d44acd7c9ca3c
+      size: 6363
+    params:
+      params.yaml:
+        train.batch_size: 8
+        train.epochs: 5
+        train.learning_rate: 0.001
+        train.model_save_path: models/enhancement_cnn.pth
+    outs:
+    - path: data/processed/dl
+      hash: md5
+      md5: 36e85daf7339313e7caf3111769f5983.dir
+      size: 11356240
+      nfiles: 25
+    - path: models/enhancement_cnn.pth
+      hash: md5
+      md5: e0a76c133e9f8401768c7d5c6591df8d
+      size: 15328
+  detect:
+    cmd: .\venv\python.exe src/detect.py
+    deps:
+    - path: data/processed/dl
+      hash: md5
+      md5: 36e85daf7339313e7caf3111769f5983.dir
+      size: 11356240
+      nfiles: 25
+    - path: src/detect.py
+      hash: md5
+      md5: 928ba6f4215c4b1ed7cc7003d402f86d
+      size: 2485
+    outs:
+    - path: data/processed/detected
+      hash: md5
+      md5: 46215bf6c3ff5f97cbda88088b6c74db.dir
+      size: 4464482
+      nfiles: 25
+  evaluate:
+    cmd: .\venv\python.exe src/evaluate.py
+    deps:
+    - path: data/processed/deterministic
+      hash: md5
+      md5: 40b3c850b8015a775631494b3520f23b.dir
+      size: 11227740
+      nfiles: 25
+    - path: data/raw
+      hash: md5
+      md5: e59c1fad0a8c34d87c8c7a20a5316573.dir
+      size: 17068806
+      nfiles: 25
+    - path: src/evaluate.py
+      hash: md5
+      md5: 8532df41daf44211270d59e34b9deac7
+      size: 3566
+    params:
+      params.yaml:
+        base.bit_depth: 14
+        evaluate.metrics:
+        - psnr
+        - ssim
+    outs:
+    - path: metrics/evaluation.json
+      hash: md5
+      md5: 511e7c7dd00ba3991b35c2dd08246006
+      size: 71

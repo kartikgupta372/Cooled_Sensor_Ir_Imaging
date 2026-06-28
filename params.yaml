@@ -1,0 +1,104 @@
+# params.yaml — Single source of truth for ALL parameters
+# Change here → DVC detects → only affected stages re-run
+
+paths:
+  calibration_dir:  "data/calibration_assets"
+  raw_dir:          "data/raw_bw"
+  simulated_dir:    "data/ir_simulated"
+  calibrated_dir:   "data/calibrated"
+  processed_dir:    "data/processed"
+  output_dir:       "data/output"
+  ground_truth_dir: "data/ground_truth"
+  models_dir:       "models"
+
+simulate:
+  num_frames:         200
+  frame_skip:         15
+  width:              640
+  height:             480
+  temp_min_k:         290.0
+  temp_max_k:         340.0
+  gain_sigma:         0.05
+  offset_sigma:       2.0
+  dark_current_mean:  50
+  dark_current_scale: 0.1
+  netd_noise_k:       0.015
+  drift_per_frame:    0.002
+  bad_pixel_ratio:    0.001
+  grain_sigma:        1.5
+
+calibrate:
+  auto_generate:     true   # auto-estimate if files missing — works on ANY image
+  dark_frame_count:  30
+  flat_frame_count:  30
+  to_kelvin:         false  # set true only when sensor constants known
+
+deterministic:
+  bad_pixel_threshold_sigma: 5.0
+  kalman_process_noise:      0.001
+  kalman_measurement_noise:  0.1
+  wavelet:                   "db4"
+  wavelet_level:             3
+  wavelet_threshold_mode:    "soft"
+  background_alpha:          0.05
+  wiener_kernel_size:        5
+
+enhance:
+  super_resolution: false    # set true if EDSR_x2.pb available in models/
+  sr_model_path:    "models/EDSR_x2.pb"
+  sr_scale:         2
+
+detection:
+  # YOLOv8 — pre-trained on COCO (80 classes). Auto-downloads on first run.
+  # Works on ANY image, no fine-tuning required.
+  yolo_model_size:   "n"      # n=nano(fastest), s=small, m=medium, l=large
+  yolo_conf:         0.25     # lower = more detections (more FP), higher = stricter
+  yolo_iou:          0.45     # NMS overlap threshold
+  device:            "cpu"    # "cpu" or "cuda:0"
+
+  # Thermal hotspot detection (no model — runs on top of YOLO)
+  use_thermal_detector:  true
+  hotspot_percentile:    90.0
+  fire_percentile:       98.0
+  min_area_pixels:       40
+
+  # Tracker
+  tracker_max_distance:  60
+  tracker_max_disappeared: 15
+
+  # All 80 COCO classes are detected automatically.
+  # The list below controls which classes are highlighted in outputs.
+  # Leave empty ([]) to show ALL 80 classes.
+  highlight_classes:
+    - person
+    - car
+    - truck
+    - bus
+    - motorcycle
+    - bicycle
+    - airplane
+    - train
+    - boat
+    - dog
+    - cat
+    - bird
+    - fire hydrant
+    - hotspot
+    - fire
+    - heat_source
+    - anomaly
+
+mlflow:
+  enabled:          true
+  tracking_uri:     "http://localhost:5000"
+  experiment_name:  "ir_pipeline_v2"
+  run_tags:
+    project:      "DRDO_SSPL"
+    pipeline_ver: "2.0.0"
+    model:        "yolov8n_coco_pretrained"
+
+api:
+  host:    "0.0.0.0"
+  port:    8000
+  workers: 4
+  max_upload_mb: 100

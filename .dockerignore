@@ -1,0 +1,9 @@
+venv/
+.git/
+.dvc/
+data/
+mlflow/
+__pycache__/
+*.tiff
+*.jpg
+*.png
