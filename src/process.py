@@ -1,15 +1,15 @@
-import os
-import yaml
-import numpy as np
-import cv2
-from tqdm import tqdm
+import os 
+import yaml 
+import numpy as np 
+import cv2 
+from tqdm import tqdm 
 
-def load_params(yaml_path="params.yaml"):
+def load_params (yaml_path ="params.yaml"):
     """Loads our configuration from the central params.yaml file."""
-    with open(yaml_path, "r") as f:
-        return yaml.safe_load(f)
+    with open (yaml_path ,"r")as f :
+        return yaml .safe_load (f )
 
-def scale_to_8bit(image):
+def scale_to_8bit (image ):
     """
     CLAHE in OpenCV only works on 8-bit (0-255) or 16-bit images.
     Our 14-bit data sits inside a uint16 container but only uses
@@ -17,20 +17,20 @@ def scale_to_8bit(image):
 
     Formula:  scaled = (pixel / max_possible_value) * 255
     """
-    max_val = 16383.0  # 2^14 - 1
-    scaled = (image.astype(np.float32) / max_val) * 255.0
-    return scaled.astype(np.uint8)
+    max_val =16383.0 
+    scaled =(image .astype (np .float32 )/max_val )*255.0 
+    return scaled .astype (np .uint8 )
 
-def scale_to_16bit(image):
+def scale_to_16bit (image ):
     """
     After CLAHE, we scale back from 8-bit to the 14-bit range inside
     a uint16 container, so all downstream scripts stay consistent.
     """
-    max_val = 16383.0
-    scaled = (image.astype(np.float32) / 255.0) * max_val
-    return scaled.astype(np.uint16)
+    max_val =16383.0 
+    scaled =(image .astype (np .float32 )/255.0 )*max_val 
+    return scaled .astype (np .uint16 )
 
-def apply_clahe(image_8bit, clip_limit, grid_size):
+def apply_clahe (image_8bit ,clip_limit ,grid_size ):
     """
     Applies CLAHE (Contrast Limited Adaptive Histogram Equalization).
 
@@ -44,17 +44,17 @@ def apply_clahe(image_8bit, clip_limit, grid_size):
     Returns:
         enhanced    : uint8 numpy array with improved local contrast
     """
-    # Create the CLAHE object with our parameters
-    clahe = cv2.createCLAHE(
-        clipLimit=clip_limit,
-        tileGridSize=tuple(grid_size)  # e.g., (8, 8)
-    )
-    
-    # Apply CLAHE — this is the main enhancement step
-    enhanced = clahe.apply(image_8bit)
-    return enhanced
 
-def apply_denoise(image, weight):
+    clahe =cv2 .createCLAHE (
+    clipLimit =clip_limit ,
+    tileGridSize =tuple (grid_size )
+    )
+
+
+    enhanced =clahe .apply (image_8bit )
+    return enhanced 
+
+def apply_denoise (image ,weight ):
     """
     Applies a light Gaussian blur to suppress any noise amplified by CLAHE.
     
@@ -64,57 +64,57 @@ def apply_denoise(image, weight):
     
     At weight=0.1, we keep 90% original detail and soften 10%.
     """
-    blurred = cv2.GaussianBlur(image, ksize=(3, 3), sigmaX=0)
-    blended = cv2.addWeighted(image, 1.0 - weight, blurred, weight, 0)
-    return blended
+    blurred =cv2 .GaussianBlur (image ,ksize =(3 ,3 ),sigmaX =0 )
+    blended =cv2 .addWeighted (image ,1.0 -weight ,blurred ,weight ,0 )
+    return blended 
 
-def process_image(image, params):
+def process_image (image ,params ):
     """Applies the full deterministic processing chain to a single image."""
-    clip_limit  = params["process"]["clahe_clip_limit"]
-    grid_size   = params["process"]["clahe_grid_size"]
-    denoise_w   = params["process"]["denoise_weight"]
+    clip_limit =params ["process"]["clahe_clip_limit"]
+    grid_size =params ["process"]["clahe_grid_size"]
+    denoise_w =params ["process"]["denoise_weight"]
 
-    # Step 1: Convert to 8-bit for CLAHE
-    image_8bit = scale_to_8bit(image)
 
-    # Step 2: Apply CLAHE for local contrast enhancement
-    enhanced_8bit = apply_clahe(image_8bit, clip_limit, grid_size)
+    image_8bit =scale_to_8bit (image )
 
-    # Step 3: Light denoise to suppress CLAHE noise amplification
-    denoised_8bit = apply_denoise(enhanced_8bit, denoise_w)
 
-    # Step 4: Scale back to 14-bit range in uint16 container
-    result = scale_to_16bit(denoised_8bit)
+    enhanced_8bit =apply_clahe (image_8bit ,clip_limit ,grid_size )
 
-    return result
 
-def main():
-    params  = load_params()
-    in_dir  = params["process"]["input_dir"]
-    out_dir = params["process"]["output_dir"]
+    denoised_8bit =apply_denoise (enhanced_8bit ,denoise_w )
 
-    os.makedirs(out_dir, exist_ok=True)
 
-    image_files = sorted([f for f in os.listdir(in_dir) if f.endswith(".tiff")])
+    result =scale_to_16bit (denoised_8bit )
 
-    if len(image_files) == 0:
-        print("No images found — run calibrate.py first!")
-        return
+    return result 
 
-    print(f"Processing {len(image_files)} images with CLAHE...")
+def main ():
+    params =load_params ()
+    in_dir =params ["process"]["input_dir"]
+    out_dir =params ["process"]["output_dir"]
 
-    for filename in tqdm(image_files):
-        in_path  = os.path.join(in_dir, filename)
-        out_path = os.path.join(out_dir, filename)
+    os .makedirs (out_dir ,exist_ok =True )
 
-        # Always load 16-bit images with IMREAD_UNCHANGED
-        image = cv2.imread(in_path, cv2.IMREAD_UNCHANGED)
+    image_files =sorted ([f for f in os .listdir (in_dir )if f .endswith (".tiff")])
 
-        processed = process_image(image, params)
+    if len (image_files )==0 :
+        print ("No images found — run calibrate.py first!")
+        return 
 
-        cv2.imwrite(out_path, processed)
+    print (f"Processing {len (image_files )} images with CLAHE...")
 
-    print(f"Saved to {out_dir}")
+    for filename in tqdm (image_files ):
+        in_path =os .path .join (in_dir ,filename )
+        out_path =os .path .join (out_dir ,filename )
 
-if __name__ == "__main__":
-    main()
+
+        image =cv2 .imread (in_path ,cv2 .IMREAD_UNCHANGED )
+
+        processed =process_image (image ,params )
+
+        cv2 .imwrite (out_path ,processed )
+
+    print (f"Saved to {out_dir }")
+
+if __name__ =="__main__":
+    main ()

@@ -44,9 +44,53 @@ deterministic:
   wiener_kernel_size:        5
 
 enhance:
-  super_resolution: false    # set true if EDSR_x2.pb available in models/
+  # ── Super-Resolution (optional, needs EDSR_x2.pb in models/) ──────────────
+  super_resolution: false
   sr_model_path:    "models/EDSR_x2.pb"
   sr_scale:         2
+
+  # ── Step 2: Anisotropic Diffusion (Perona-Malik) ──────────────────────────
+  # Core algorithm for old-film / degraded image grain removal.
+  # Increase iterations for more smoothing; lower kappa preserves weaker edges.
+  anisotropic_iterations:  20     # diffusion steps  (range: 10–30)
+  anisotropic_kappa:       25.0   # edge-stopping threshold (range: 15–50)
+  anisotropic_gamma:       0.12   # step size, must stay < 0.25 for stability
+
+  # ── Step 3: Multi-Scale Retinex (MSR) ─────────────────────────────────────
+  # Core algorithm for contrast recovery from faded / low-contrast images.
+  # Three Gaussian scales: [fine detail, mid-range, global illumination].
+  retinex_sigmas:   [10, 60, 180]  # sigma values for MSR
+  retinex_blend:    0.65           # MSR weight in blend (0.0=only diffused, 1.0=only retinex)
+
+  # ── Step 4: Adaptive NLM Denoising ────────────────────────────────────────
+  # h is computed as: h = clip(noise_sigma * 80, nlm_h_min, nlm_h_max)
+  # Was previously fixed at h=15 — too aggressive, destroyed edges.
+  nlm_h_min:        4     # minimum denoising strength (clean images)
+  nlm_h_max:        12    # maximum denoising strength (very noisy images)
+
+  # ── Step 5: Top-Hat Enhancement ───────────────────────────────────────────
+  tophat_kernel_size:  13    # structuring element size (px)
+  tophat_strength:     0.25  # blend weight of top-hat residual
+
+  # ── Step 6: CLAHE ─────────────────────────────────────────────────────────
+  # Increased from 2.0 to 3.0 — safe now that diffusion cleaned background
+  clahe_clip_limit:    3.0   # contrast limit (range: 1.5–5.0)
+  clahe_tile_size:     8     # grid divisions (8x8 = local blocks of ~60px at 480p)
+
+  # ── Step 7: Bilateral Filter ───────────────────────────────────────────────
+  # Was defined but never called in v2.0 — now active.
+  bilateral_d:            7     # filter diameter in pixels
+  bilateral_sigma_color:  50.0  # intensity range for averaging
+  bilateral_sigma_space:  50.0  # spatial neighbourhood radius
+
+  # ── Step 8: Unsharp Masking ────────────────────────────────────────────────
+  # Reduced amount from 1.5→0.8 — prevents halo artifacts after Retinex
+  unsharp_radius:     1.5   # Gaussian blur radius for unsharp mask
+  unsharp_amount:     0.8   # sharpening strength (range: 0.5–1.5)
+  unsharp_threshold:  10    # only sharpen pixels where |edge| > threshold
+
+  # ── Step 9: Gamma ──────────────────────────────────────────────────────────
+  gamma: 0.80   # < 1.0 brightens midtones (0.75=FLIR standard, 0.80=good for film)
 
 detection:
   # YOLOv8 — pre-trained on COCO (80 classes). Auto-downloads on first run.
@@ -94,7 +138,7 @@ mlflow:
   experiment_name:  "ir_pipeline_v2"
   run_tags:
     project:      "DRDO_SSPL"
-    pipeline_ver: "2.0.0"
+    pipeline_ver: "3.0.0"
     model:        "yolov8n_coco_pretrained"
 
 api:

@@ -1,21 +1,38 @@
 """
-enhance.py — Professional IR Image Enhancement Pipeline v2.0
+enhance.py — Professional IR Image Enhancement Pipeline v3.0
 ============================================================
-Upgraded algorithm stack designed specifically for cooled IR sensors.
+Upgraded algorithm stack designed specifically for degraded / old-film
+style images AND cooled IR sensors.
+
+WHAT CHANGED FROM v2.0:
+  ✅  Anisotropic Diffusion (Perona-Malik) — NOW ACTIVE in pipeline
+      Previously defined but never called. This is the single most
+      important fix for old-film / film-grain noise.
+
+  ✅  Multi-Scale Retinex (MSR) — NOW ACTIVE in pipeline
+      Previously defined but never called. Critical for fixing
+      washed-out, low-contrast faded images.
+
+  ✅  Bilateral filter — NOW ACTIVE in pipeline (was defined, not used)
+
+  ✅  Adaptive NLM strength — h now scales with measured noise (was fixed h=15)
+      h=15 was destroying edges and giving plastic "over-smoothed" output.
+
+  ✅  CLAHE clip_limit 2.0 → 3.0 — stronger local contrast for film images
 
 Algorithm chain (in order):
-  1. Robust percentile normalisation          — clip dead/hot pixels
-  2. Bad pixel inpainting                      — remove sensor artifacts
-  3. Anisotropic diffusion (Perona-Malik)      — smooth within regions, SHARPEN edges
-  4. Multi-Scale Retinex (MSR)                 — separate thermal signal from background
-  5. CLAHE with optimised IR parameters        — local contrast boost
-  6. Morphological top-hat enhancement         — lift small warm features (pedestrians)
-  7. Bilateral filter final pass               — clean up without losing edges
-  8. Adaptive unsharp masking                  — crisp, sharp output
-  9. IR gamma curve                            — proper perceptual mapping
-
-Result: clear, sharp images where vehicles and people stand out cleanly
-        — like the professional FLIR / DRDO reference output.
+  0. Grayscale + robust percentile normalisation   → float32 [0, 1]
+  1. Median 3×3                                    → kill dead/hot pixels
+  2. Anisotropic Diffusion (Perona-Malik)          → smooth grain, SHARPEN edges
+  3. Multi-Scale Retinex (MSR)                     → recover washed-out contrast
+  4. Retinex + Diffusion blend (65/35)             → optimal depth retention
+  5. Adaptive NLM denoising (h ∝ noise level)     → clean residual noise
+  6. Morphological top-hat enhancement             → lift small warm targets
+  7. CLAHE (clip=3.0)                              → strong local contrast
+  8. Bilateral filter                              → edge-preserving cleanup
+  9. Adaptive unsharp masking                      → crisp edges
+  10. IR gamma curve (γ=0.80)                      → proper perceptual mapping
+  11. (Optional) Super-resolution                  → upscale with EDSR
 """
 
 import cv2
@@ -88,9 +105,6 @@ def robust_normalize(frame: np.ndarray, lo_pct: float = 1.0,
     Percentile-based normalisation → float32 [0, 1].
     Clips the bottom lo_pct% and top hi_pct% to remove dead/hot pixels
     BEFORE computing the dynamic range — gives full 8-bit to real signal.
-
-    IR insight: a single saturated pixel can collapse the entire image
-    dynamic range; percentile clipping prevents this completely.
     """
     f  = frame.astype(np.float32)
     lo = float(np.percentile(f, lo_pct))
@@ -134,45 +148,54 @@ def inpaint_artifacts(frame_uint8: np.ndarray) -> np.ndarray:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. ANISOTROPIC DIFFUSION  (Perona-Malik)
+# 4. ANISOTROPIC DIFFUSION  (Perona-Malik)  ← KEY ALGORITHM FOR FILM GRAIN
 # ══════════════════════════════════════════════════════════════════════════════
 def anisotropic_diffusion(img: np.ndarray,
-                           num_iter: int = 10,
-                           kappa: float = 30.0,
-                           gamma: float = 0.1,
+                           num_iter: int = 20,
+                           kappa: float = 25.0,
+                           gamma: float = 0.12,
                            option: int = 2) -> np.ndarray:
     """
     Perona-Malik anisotropic diffusion.
 
-    WHY THIS IS BETTER THAN GAUSSIAN / NL-MEANS FOR IR:
-    - Gaussian blurs everything, including the vehicle-background edge.
-    - NL-means is very slow and sometimes over-smooths thermal gradients.
-    - Anisotropic diffusion SMOOTHS flat regions (background noise) but
-      SHARPENS edges (vehicle outlines, person silhouettes) — exactly what
-      a cooled IR sensor image needs.
+    WHY THIS IS THE BEST CHOICE FOR OLD-FILM / DEGRADED IMAGES:
+    ─────────────────────────────────────────────────────────────
+    - Gaussian blur: smooths everything uniformly → destroys edges.
+    - Median filter: salt-and-pepper only, not film grain.
+    - NLM: good but treats all texture similarly; over-smooths weak edges.
+
+    Perona-Malik SOLVES this by being content-aware:
+      c(∇I) = 1 / (1 + (|∇I| / κ)²)   [option 2, Perona-Malik 2]
+
+    At a FLAT region (road, sky, background): |∇I| ≈ 0 → c ≈ 1 → full diffusion
+    At an EDGE (vehicle outline, person): |∇I| >> κ → c ≈ 0 → NO diffusion
+
+    Result: background noise smoothed away; object boundaries SHARPENED.
+    This is exactly what you need for film-extracted noisy images.
 
     Parameters:
-        num_iter : number of diffusion steps (more = smoother regions)
-        kappa    : edge stopping threshold (lower = preserves more edges)
-        gamma    : step size (0 < gamma ≤ 0.25 for stability)
-        option   : 1 = Perona-Malik 1 (exp), 2 = Perona-Malik 2 (rational)
+        num_iter : diffusion steps (20 = strong grain removal without edge blur)
+        kappa    : edge stopping value. 25 = good for weak edges in degraded film.
+                   Lower → more edges preserved. Higher → more smoothing.
+        gamma    : step size (< 0.25 for numerical stability, 0.12 = safe + fast)
+        option   : 2 = Perona-Malik 2 (better for noisy images than option 1)
     """
     f = img.astype(np.float32)
     for _ in range(num_iter):
-        # Finite differences in 4 directions
+        # Four-directional finite differences
         dN = np.roll(f,  1, axis=0) - f
         dS = np.roll(f, -1, axis=0) - f
         dE = np.roll(f, -1, axis=1) - f
         dW = np.roll(f,  1, axis=1) - f
 
         if option == 1:
-            # Perona-Malik function 1: c(x) = exp(-(|∇I|/κ)²)
+            # PM1: c(x) = exp(-(|∇I|/κ)²)  — more aggressive edge stopping
             cN = np.exp(-(dN / kappa) ** 2)
             cS = np.exp(-(dS / kappa) ** 2)
             cE = np.exp(-(dE / kappa) ** 2)
             cW = np.exp(-(dW / kappa) ** 2)
         else:
-            # Perona-Malik function 2: c(x) = 1 / (1 + (|∇I|/κ)²)
+            # PM2: c(x) = 1 / (1 + (|∇I|/κ)²)  — smoother, better for noisy images
             cN = 1.0 / (1.0 + (dN / kappa) ** 2)
             cS = 1.0 / (1.0 + (dS / kappa) ** 2)
             cE = 1.0 / (1.0 + (dE / kappa) ** 2)
@@ -184,45 +207,60 @@ def anisotropic_diffusion(img: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. MULTI-SCALE RETINEX  (MSR)
+# 5. MULTI-SCALE RETINEX  (MSR)  ← KEY ALGORITHM FOR LOW-CONTRAST RECOVERY
 # ══════════════════════════════════════════════════════════════════════════════
 def multi_scale_retinex(img: np.ndarray,
                          sigmas: list = None,
                          weights: list = None) -> np.ndarray:
     """
-    Multi-Scale Retinex for IR contrast enhancement.
+    Multi-Scale Retinex for recovering contrast from degraded/faded images.
 
-    WHY RETINEX FOR IR:
-    - Retinex separates the image into "illumination" (background warmth gradient)
-      and "reflectance" (actual thermal signature of objects).
-    - For IR cameras: the slow ambient temperature gradient is the "illumination".
-      Hot targets (vehicles, people) are the "reflectance".
-    - MSR removes the ambient gradient and reveals the true thermal contrast
-      → dark sky, bright warm objects — exactly like the reference image.
+    WHY RETINEX IS CRITICAL FOR OLD-FILM / LOW-CONTRAST IR:
+    ─────────────────────────────────────────────────────────
+    The Retinex theory (Edwin Land, 1977) separates an image into:
+        I(x,y) = L(x,y) × R(x,y)
+    where:
+        L = illumination  (slow, large-scale variation)
+        R = reflectance   (fast, fine-scale — actual object detail)
 
-    sigmas: Gaussian scales [small=detail, medium=mid, large=global illumination]
+    For OLD FILM images:
+        L = uneven film development, fading, grain background
+        R = actual scene content (vehicles, people, objects)
+
+    For IR images:
+        L = ambient temperature gradient (warm ground, cold sky)
+        R = true thermal signature of hot targets
+
+    MSR computes: log(R) = log(I) - weighted_sum(log(Gaussian_blur(I)))
+    → removes the illumination component entirely
+    → objects pop out even in globally washed-out, low-contrast images
+
+    sigmas: [small, medium, large]
+        small  (10-15) : recovers fine detail
+        medium (60-80) : mid-range contrast
+        large (180-250): removes global illumination gradient
     """
     if sigmas is None:
-        sigmas = [15, 80, 250]
+        sigmas = [10, 60, 180]
     if weights is None:
         weights = [1.0 / len(sigmas)] * len(sigmas)
 
     img_f  = img.astype(np.float32)
-    log_I  = np.log1p(img_f * 255.0)   # log(I + 1)
+    log_I  = np.log1p(img_f * 255.0)   # log(I + 1), working in 0-255 range
     retinex = np.zeros_like(log_I)
 
     for sigma, w in zip(sigmas, weights):
-        # Estimate "illumination" as a blurred version of the image
-        ksize = int(6 * sigma + 1) | 1          # must be odd
-        blurred   = cv2.GaussianBlur(img_f * 255.0, (ksize, ksize), sigma)
-        log_blur  = np.log1p(blurred)
-        retinex  += w * (log_I - log_blur)      # log-domain subtraction
+        ksize    = int(6 * sigma + 1) | 1          # kernel must be odd
+        blurred  = cv2.GaussianBlur(img_f * 255.0, (ksize, ksize), sigma)
+        log_blur = np.log1p(blurred)
+        retinex += w * (log_I - log_blur)           # log-domain subtraction = division in linear
 
-    # Normalise retinex output to [0, 1]
+    # Normalise retinex output → [0, 1], robust to outliers
     lo = float(np.percentile(retinex, 1))
     hi = float(np.percentile(retinex, 99))
     if hi - lo < 1e-6:
-        hi = lo + 1.0
+        # Fallback: if retinex collapsed, return original normalised image
+        return robust_normalize(img, lo_pct=1.0, hi_pct=99.0)
 
     retinex = np.clip((retinex - lo) / (hi - lo), 0.0, 1.0)
     return retinex.astype(np.float32)
@@ -231,24 +269,20 @@ def multi_scale_retinex(img: np.ndarray,
 # ══════════════════════════════════════════════════════════════════════════════
 # 6. MORPHOLOGICAL TOP-HAT ENHANCEMENT
 # ══════════════════════════════════════════════════════════════════════════════
-def tophat_enhance(img_uint8: np.ndarray, kernel_size: int = 15,
-                   strength: float = 0.4) -> np.ndarray:
+def tophat_enhance(img_uint8: np.ndarray, kernel_size: int = 13,
+                   strength: float = 0.25) -> np.ndarray:
     """
     Morphological top-hat transform for small hot-target enhancement.
 
-    WHY TOP-HAT FOR IR:
-    - Top-hat = image − morphological_opening(image)
-    - Opening removes objects smaller than the structuring element.
-    - The residual (top-hat) = exactly the small bright features that were removed.
-    - For IR: this highlights pedestrians, vehicle hot-spots, small aircraft
-      that would otherwise be swamped by background gradients.
-    - Strength controls how much of the top-hat is added back.
+    Top-hat = image − morphological_opening(image)
+    The residual = exactly the small bright features (pedestrians, vehicles)
+    that are smaller than the structuring element.
+    Strength controls how aggressively they are boosted.
     """
-    kernel    = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+    kernel   = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                           (kernel_size, kernel_size))
-    tophat    = cv2.morphologyEx(img_uint8, cv2.MORPH_TOPHAT, kernel)
-    enhanced  = cv2.addWeighted(img_uint8, 1.0, tophat,
-                                 strength, 0)
+    tophat   = cv2.morphologyEx(img_uint8, cv2.MORPH_TOPHAT, kernel)
+    enhanced = cv2.addWeighted(img_uint8, 1.0, tophat, strength, 0)
     return np.clip(enhanced, 0, 255).astype(np.uint8)
 
 
@@ -259,12 +293,16 @@ def apply_clahe(img_uint8: np.ndarray,
                 clip_limit: float = 3.0,
                 tile_size: int = 8) -> np.ndarray:
     """
-    CLAHE optimised for IR thermal imaging.
+    CLAHE optimised for IR thermal / degraded film imaging.
 
-    IR-tuned parameters vs default:
-    - clip_limit=3.0  (default=2.0): stronger local contrast in uniform scenes
-    - tile_size=8     : 8×8 grid → local normalisation at ~60px block for 480p
-    Works on 8-bit grayscale input.
+    clip_limit=3.0 (up from 2.0):
+        For heavily degraded film images, we need stronger local
+        contrast to pull objects out of the washed background.
+        3.0 gives more pop without over-amplifying noise
+        (which is already handled by anisotropic diffusion before this step).
+
+    tile_size=8:
+        8×8 grid ensures localised enhancement for uneven illumination.
     """
     clahe = cv2.createCLAHE(clipLimit=clip_limit,
                               tileGridSize=(tile_size, tile_size))
@@ -272,23 +310,23 @@ def apply_clahe(img_uint8: np.ndarray,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8. BILATERAL FILTER  (edge-preserving final smoothing)
+# 8. BILATERAL FILTER  (edge-preserving final smoothing)  ← NOW ACTIVE
 # ══════════════════════════════════════════════════════════════════════════════
 def bilateral_denoise(img_uint8: np.ndarray,
-                       d: int = 9,
-                       sigma_color: float = 60.0,
-                       sigma_space: float = 60.0) -> np.ndarray:
+                       d: int = 7,
+                       sigma_color: float = 50.0,
+                       sigma_space: float = 50.0) -> np.ndarray:
     """
-    Bilateral filter — the go-to edge-preserving denoiser for IR.
+    Bilateral filter — edge-preserving denoiser, now active in main pipeline.
 
-    WHY BILATERAL:
-    - Standard blur averages pixels within a spatial window (kills edges).
-    - Bilateral adds a second weight based on INTENSITY DIFFERENCE.
-    - Pixels far in intensity (= across a thermal edge) are NOT averaged.
-    - Result: smooth background noise + sharp vehicle/person boundaries.
+    PREVIOUSLY: This function was defined but never called in enhance_frame().
+    NOW: Called after CLAHE to remove any blocking/ringing artifacts CLAHE
+         introduces, while preserving the sharp edges that diffusion + retinex
+         worked hard to create.
 
-    sigma_color: intensity range for averaging — 60 is good for 8-bit IR
-    sigma_space: spatial reach — 60 pixels
+    sigma_color=50: pixels within ±50 intensity units are averaged together
+    sigma_space=50: spatial neighbourhood of ~50 pixels
+    d=7: filter diameter (smaller than 9 for better speed, sufficient quality)
     """
     return cv2.bilateralFilter(img_uint8, d=d,
                                 sigmaColor=sigma_color,
@@ -299,25 +337,26 @@ def bilateral_denoise(img_uint8: np.ndarray,
 # 9. ADAPTIVE UNSHARP MASKING
 # ══════════════════════════════════════════════════════════════════════════════
 def unsharp_mask(img_uint8: np.ndarray,
-                  radius: float = 2.0,
-                  amount: float = 1.5,
+                  radius: float = 1.5,
+                  amount: float = 0.8,
                   threshold: int = 10) -> np.ndarray:
     """
     Unsharp masking — sharpens edges without amplifying flat-region noise.
 
-    The 'threshold' parameter is key for IR:
-    - Only pixels with local contrast > threshold get sharpened.
-    - Flat noise regions (below threshold) are left untouched.
-    - Edge regions (above threshold) get amount × boost.
+    amount=0.8 (reduced from 1.5):
+        After diffusion + retinex, edges are already well-defined.
+        Aggressive unsharp masking (amount=1.5) was causing halo artifacts.
+        0.8 gives crisp boundaries without halos.
 
-    amount=1.5 gives crisp vehicle outlines while keeping background clean.
+    threshold=10:
+        Only pixels with local contrast > 10 are sharpened.
+        This protects the smoothed background from re-gaining noise.
     """
     blurred   = cv2.GaussianBlur(img_uint8, (0, 0), sigmaX=radius)
     sharpened = cv2.addWeighted(img_uint8, 1.0 + amount,
                                  blurred, -amount, 0)
-    # Threshold: only apply where edge is significant
-    mask = np.abs(img_uint8.astype(np.int16) -
-                  blurred.astype(np.int16)) > threshold
+    mask   = np.abs(img_uint8.astype(np.int16) -
+                    blurred.astype(np.int16)) > threshold
     result = np.where(mask, sharpened, img_uint8)
     return np.clip(result, 0, 255).astype(np.uint8)
 
@@ -325,14 +364,14 @@ def unsharp_mask(img_uint8: np.ndarray,
 # ══════════════════════════════════════════════════════════════════════════════
 # 10. IR GAMMA CURVE
 # ══════════════════════════════════════════════════════════════════════════════
-def ir_gamma(img_uint8: np.ndarray, gamma: float = 0.75) -> np.ndarray:
+def ir_gamma(img_uint8: np.ndarray, gamma: float = 0.80) -> np.ndarray:
     """
     Gamma correction tuned for IR thermal display.
 
-    gamma < 1.0 brightens the midtones (lifts warm targets from background).
-    gamma = 0.75 is the FLIR standard for grayscale IR display.
-
-    Uses a LUT (lookup table) — runs at full speed, one byte → one byte.
+    gamma=0.80 (tweaked from 0.85):
+        γ < 1.0 brightens midtones → warm targets lift from background.
+        0.80 gives slightly more pop for faded film images.
+        Uses a LUT for maximum speed (one byte → one byte mapping).
     """
     lut = np.array(
         [int(((i / 255.0) ** gamma) * 255) for i in range(256)],
@@ -389,55 +428,179 @@ def tone_map(frame: np.ndarray) -> np.ndarray:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MASTER ENHANCEMENT FUNCTION  (public API — called by test_pipeline.py, app.py)
+# MASTER ENHANCEMENT FUNCTION  (v3.0 — public API)
 # ══════════════════════════════════════════════════════════════════════════════
 def enhance_frame(frame: np.ndarray,
                   do_sr: bool = False,
                   sr_model_path: str = None,
-                  return_8bit: bool = True) -> np.ndarray:
+                  return_8bit: bool = True,
+                  params: dict = None) -> np.ndarray:
     """
-    Robust IR enhancement pipeline designed for heavily noisy environments.
+    v3.0 IR Enhancement Pipeline — optimised for degraded / old-film images.
+
+    Key changes from v2.0:
+    ─────────────────────
+    1. Anisotropic Diffusion (Perona-Malik) ADDED → best grain smoother
+       that preserves and actually sharpens object edges.
+
+    2. Multi-Scale Retinex ADDED → removes background illumination gradient
+       and recovers contrast from faded / washed-out film images.
+
+    3. Adaptive NLM h → was fixed h=15 (too aggressive, destroys edges).
+       Now h scales with measured noise: h ∈ [4, 12].
+
+    4. Bilateral filter ADDED (was defined, never called) → removes CLAHE
+       blocking artifacts while keeping edges from step 2-3.
+
+    5. CLAHE clip_limit 2.0 → 3.0 → stronger local contrast for film images.
+
+    6. Unsharp amount 1.5 → 0.8 → prevents halo artifacts after Retinex.
 
     Input  : any image (any dtype, any shape, any bit depth)
-    Output : enhanced uint8 grayscale — smooth background, sharp targets.
+    Output : enhanced uint8 grayscale — clean background, sharp targets.
     """
+    p = params or {}
+
     # ── Step 0: Convert to float32 grayscale & robust normalise ─────────────
     meta = detect_image_type(frame)
     f = frame.astype(np.float32)
     if meta["is_color"]:
         f = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
 
-    norm = robust_normalize(f, lo_pct=0.5, hi_pct=99.5)
-    
-    # Convert to 8-bit for OpenCV optimized filters
-    img_8u = (norm * 255).astype(np.uint8)
+    norm = robust_normalize(f, lo_pct=0.5, hi_pct=99.5)   # float32 [0, 1]
 
-    # ── Step 1: Median Filter (Kill salt & pepper / dead pixels) ────────────
-    # A 3x3 median filter is much more robust and faster than inpainting.
-    median = cv2.medianBlur(img_8u, 3)
+    # ── Step 1: Median 3×3 — kill salt-and-pepper / dead pixels ─────────────
+    # A fast 3×3 median is the most reliable dead/hot pixel killer.
+    # Runs in uint8 space for speed, then converts back to float32.
+    img_8u     = (norm * 255).astype(np.uint8)
+    median_out = cv2.medianBlur(img_8u, 3)
+    f_clean    = median_out.astype(np.float32) / 255.0
 
-    # ── Step 2: Non-Local Means Denoising ───────────────────────────────────
-    # NLM is the gold standard for heavy Gaussian noise. It averages similar
-    # patches, perfectly smoothing the background while keeping targets sharp.
-    # We use h=15 (strong denoising).
-    nlm = cv2.fastNlMeansDenoising(median, None, h=15, templateWindowSize=7, searchWindowSize=21)
+    # ── Step 2: Anisotropic Diffusion (Perona-Malik) ─────────────────────────
+    # THE SINGLE MOST IMPORTANT FIX for film-grain / old-film images.
+    #
+    # What it does:
+    #   • In flat regions (road, sky, background): diffuses heavily → grain removed
+    #   • At edges (vehicle outline, person silhouette): stops completely → edge sharpened
+    #
+    # Why it beats Gaussian or NLM alone:
+    #   • Gaussian: treats edges and flat areas equally → edges blurred
+    #   • NLM: can over-smooth weak edges in degraded images (h=15 was catastrophic)
+    #   • Perona-Malik: content-aware → smooth background, crisp foreground
+    #
+    # Parameters (tuned for noisy / degraded film images):
+    #   num_iter=20 : strong grain removal in flat areas
+    #   kappa=25    : low enough to preserve even weak film-degraded edges
+    #   gamma=0.12  : safe step size (must be < 0.25)
+    f_diffused = anisotropic_diffusion(
+        f_clean,
+        num_iter=p.get("anisotropic_iterations", 20),
+        kappa=p.get("anisotropic_kappa", 25.0),
+        gamma=p.get("anisotropic_gamma", 0.12),
+        option=2
+    )
 
-    # ── Step 3: Morphological Top-Hat (Optional Lift) ───────────────────────
-    # Lifts small hot targets gently without blowing up noise.
-    tophat_out = tophat_enhance(nlm, kernel_size=15, strength=0.2)
+    # ── Step 3: Multi-Scale Retinex (MSR) ────────────────────────────────────
+    # THE SECOND KEY FIX for faded / low-contrast film images.
+    #
+    # What it does:
+    #   • Separates illumination (fading, uneven development, background glow)
+    #     from reflectance (actual vehicles, people, objects).
+    #   • Removes the illumination component → objects pop out against background.
+    #
+    # Why it matters for old film:
+    #   • Old film images are often globally washed out / grey everywhere.
+    #   • Standard CLAHE boosts local contrast but can't fix the global problem.
+    #   • Retinex removes the slow background component → reveals true detail.
+    #
+    # sigmas=[10, 60, 180] — three scales:
+    #   10  : recovers fine grain-level detail
+    #   60  : recovers mid-range object contrast
+    #   180 : removes global background illumination gradient
+    f_retinex = multi_scale_retinex(
+        f_diffused,
+        sigmas=p.get("retinex_sigmas", [10, 60, 180])
+    )
 
-    # ── Step 4: Gentle CLAHE ────────────────────────────────────────────────
-    # Lower clip_limit (2.0) prevents noise amplification in the background.
-    clahe_out = apply_clahe(tophat_out, clip_limit=2.0, tile_size=8)
+    # Blend: 65% Retinex + 35% Diffused
+    # Pure Retinex occasionally loses volumetric depth (objects look flat).
+    # Blending keeps depth + still fixes the contrast problem.
+    blend_ratio = p.get("retinex_blend", 0.65)
+    f_blended   = blend_ratio * f_retinex + (1.0 - blend_ratio) * f_diffused
+    f_blended   = np.clip(f_blended, 0.0, 1.0)
 
-    # ── Step 5: Adaptive Unsharp Masking ────────────────────────────────────
-    # A slight sharpening of actual edges (targets) only.
-    sharp = unsharp_mask(clahe_out, radius=1.0, amount=1.0, threshold=15)
+    # ── Step 4: Adaptive NLM Denoising ──────────────────────────────────────
+    # After diffusion + retinex, the image is already much cleaner.
+    # We use a NOISE-ADAPTIVE h instead of the previous fixed h=15.
+    #
+    # h=15 was the root cause of the "plastic / over-smoothed" output:
+    # it was smoothing everything including the edges that diffusion had
+    # just sharpened. Now h scales between 4 (clean) and 12 (very noisy).
+    #
+    # Formula: h = clip(noise_sigma × 80, 4, 12)
+    # Example: noise_sigma=0.08 → h=6 (moderate denoising)
+    #          noise_sigma=0.15 → h=12 (heavy denoising for very noisy input)
+    noise_sigma = meta.get("noise_sigma", 0.05)
+    h_nlm       = int(np.clip(noise_sigma * 80,
+                               p.get("nlm_h_min", 4),
+                               p.get("nlm_h_max", 12)))
+    img_8u = (f_blended * 255).astype(np.uint8)
+    nlm    = cv2.fastNlMeansDenoising(
+        img_8u, None,
+        h=h_nlm,
+        templateWindowSize=7,
+        searchWindowSize=21
+    )
 
-    # ── Step 6: IR Gamma Curve (γ = 0.75) ───────────────────────────────────
-    out = ir_gamma(sharp, gamma=0.85)  # slightly less aggressive gamma
+    # ── Step 5: Morphological Top-Hat — lift small warm targets ─────────────
+    # Highlights small bright features (pedestrians, vehicle hot-spots)
+    # that might still be dim relative to their surroundings.
+    # strength=0.25 is gentle — we don't want to re-introduce grain.
+    tophat_out = tophat_enhance(
+        nlm,
+        kernel_size=p.get("tophat_kernel_size", 13),
+        strength=p.get("tophat_strength", 0.25)
+    )
 
-    # ── Step 7: Optional super-resolution ──────────────────────────────────
+    # ── Step 6: CLAHE — local contrast boost ────────────────────────────────
+    # clip_limit=3.0 (increased from 2.0):
+    #   After diffusion cleaned the background, CLAHE now boosts real contrast
+    #   rather than amplifying noise. 3.0 is safe here.
+    clahe_out = apply_clahe(
+        tophat_out,
+        clip_limit=p.get("clahe_clip_limit", 3.0),
+        tile_size=p.get("clahe_tile_size", 8)
+    )
+
+    # ── Step 7: Bilateral Filter ─────────────────────────────────────────────
+    # PREVIOUSLY DEFINED BUT NEVER CALLED. Now active.
+    # Purpose: Remove any CLAHE blocking/tiling artifacts while keeping
+    # the sharp vehicle/person edges that we worked hard to create.
+    # sigma_color=50, sigma_space=50: conservative — we're mostly done.
+    bilateral_out = bilateral_denoise(
+        clahe_out,
+        d=p.get("bilateral_d", 7),
+        sigma_color=p.get("bilateral_sigma_color", 50.0),
+        sigma_space=p.get("bilateral_sigma_space", 50.0)
+    )
+
+    # ── Step 8: Adaptive Unsharp Masking ────────────────────────────────────
+    # amount=0.8 (reduced from 1.5):
+    #   Retinex already sharpened the edges. We just need a light final pass.
+    #   1.5 was causing halo artifacts around vehicle boundaries.
+    sharp = unsharp_mask(
+        bilateral_out,
+        radius=p.get("unsharp_radius", 1.5),
+        amount=p.get("unsharp_amount", 0.8),
+        threshold=p.get("unsharp_threshold", 10)
+    )
+
+    # ── Step 9: IR Gamma Curve ───────────────────────────────────────────────
+    # gamma=0.80 (slightly more aggressive than 0.85):
+    #   Lifts the midtones more for faded film images where targets are dim.
+    out = ir_gamma(sharp, gamma=p.get("gamma", 0.80))
+
+    # ── Step 10: Optional Super-Resolution ──────────────────────────────────
     if do_sr:
         out = super_resolve(out, model_path=sr_model_path)
 

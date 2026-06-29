@@ -1,971 +1,720 @@
 """
-app.py — Streamlit frontend for the IR Imaging Pipeline
+app.py — Streamlit frontend for IR Imaging Pipeline
 Run: streamlit run app.py
 """
 
-import sys, os, io, json, time, zipfile, tempfile
-from pathlib import Path
+import sys ,os ,io ,json ,time ,zipfile 
+from pathlib import Path 
 
-import streamlit as st
-import numpy as np
-import cv2
-from PIL import Image
+import streamlit as st 
+import numpy as np 
+import cv2 
+from PIL import Image 
 
-# ── Add src to Python path ────────────────────────────────────────────────────
-ROOT = Path(__file__).parent
-sys.path.insert(0, str(ROOT / "src"))
+ROOT =Path (__file__ ).parent 
+sys .path .insert (0 ,str (ROOT /"src"))
 
-# ── Page config (MUST be first Streamlit call) ────────────────────────────────
-st.set_page_config(
-    page_title="IR Imaging Pipeline",
-    page_icon="🌡️",
-    layout="wide",
-    initial_sidebar_state="expanded",
+st .set_page_config (
+page_title ="IR Imaging Pipeline",
+page_icon ="🌡️",
+layout ="wide",
+initial_sidebar_state ="expanded",
 )
 
-# ── CSS — dark themed, custom design ─────────────────────────────────────────
-st.markdown("""
+
+st .markdown ("""
 <style>
-/* ── Global ────────────────────────────────────────────────────── */
 html, body, [data-testid="stAppViewContainer"] {
-    background-color: #060B14 !important;
-    color: #F1F5F9 !important;
+    background-color: #07090F !important; color: #F1F5F9 !important;
 }
 [data-testid="stSidebar"] {
     background-color: #0A0E1A !important;
-    border-right: 1px solid #1E3A5F !important;
+    border-right: 1px solid #1A2A40 !important;
 }
 [data-testid="stHeader"] { background: transparent !important; }
+h1,h2,h3,h4 { color:#F1F5F9 !important; }
+p, li, label, span { color:#CBD5E1 !important; }
 
-/* ── Typography ─────────────────────────────────────────────────── */
-h1, h2, h3, h4 { color: #F1F5F9 !important; letter-spacing: 0.5px; }
-p, li, span, label { color: #CBD5E1 !important; }
-
-/* ── Cards ──────────────────────────────────────────────────────── */
-.ir-card {
-    background: #111827;
-    border: 1px solid #1E3A5F;
-    border-radius: 12px;
-    padding: 1.2rem 1.4rem;
-    margin-bottom: 1rem;
+.card {
+    background:#0F1623; border:1px solid #1A2A40;
+    border-radius:12px; padding:1.1rem 1.3rem; margin-bottom:1rem;
 }
-.ir-card-accent-cyan  { border-top: 3px solid #00D4FF; }
-.ir-card-accent-green { border-top: 3px solid #10B981; }
-.ir-card-accent-yell  { border-top: 3px solid #F59E0B; }
-.ir-card-accent-purp  { border-top: 3px solid #8B5CF6; }
-.ir-card-accent-red   { border-top: 3px solid #EF4444; }
+.card-cyan  { border-top:3px solid #00D4FF; }
+.card-green { border-top:3px solid #22C55E; }
+.card-yell  { border-top:3px solid #F59E0B; }
 
-/* ── Metric tiles ───────────────────────────────────────────────── */
-.metric-row { display:flex; gap:12px; margin:0.8rem 0; flex-wrap:wrap; }
+.metric-row { display:flex; gap:10px; flex-wrap:wrap; margin:0.7rem 0; }
 .metric-tile {
-    background:#111827;
-    border:1px solid #1E3A5F;
-    border-radius:10px;
-    padding:12px 18px;
-    min-width:110px;
-    text-align:center;
-    flex:1;
+    background:#0F1623; border:1px solid #1A2A40; border-radius:10px;
+    padding:12px 16px; min-width:100px; text-align:center; flex:1;
 }
-.metric-tile .val {
-    font-size:1.6rem;
-    font-weight:700;
-    line-height:1.1;
-    margin-bottom:3px;
-}
-.metric-tile .lbl {
-    font-size:0.7rem;
-    letter-spacing:1.5px;
-    text-transform:uppercase;
-    color:#64748B;
-}
+.metric-tile .val { font-size:1.55rem; font-weight:800; line-height:1.1; }
+.metric-tile .lbl { font-size:0.68rem; letter-spacing:1.5px;
+                    text-transform:uppercase; color:#475569; }
 
-/* ── Badges ─────────────────────────────────────────────────────── */
 .badge {
-    display:inline-block;
-    font-size:0.72rem;
-    font-weight:600;
-    padding:3px 10px;
-    border-radius:20px;
-    margin:2px 3px;
-    letter-spacing:.4px;
+    display:inline-block; font-size:0.72rem; font-weight:600;
+    padding:3px 9px; border-radius:20px; margin:2px 3px; letter-spacing:.3px;
 }
-.badge-cyan  { background:#00D4FF22; color:#00D4FF; border:1px solid #00D4FF44; }
-.badge-green { background:#10B98122; color:#10B981; border:1px solid #10B98144; }
-.badge-yell  { background:#F59E0B22; color:#F59E0B; border:1px solid #F59E0B44; }
-.badge-red   { background:#EF444422; color:#EF4444; border:1px solid #EF444444; }
-.badge-purp  { background:#8B5CF622; color:#8B5CF6; border:1px solid #8B5CF644; }
-.badge-blue  { background:#3B82F622; color:#3B82F6; border:1px solid #3B82F644; }
+.bc { background:#00D4FF18;color:#00D4FF;border:1px solid #00D4FF33; }
+.bg { background:#22C55E18;color:#22C55E;border:1px solid #22C55E33; }
+.by { background:#F59E0B18;color:#F59E0B;border:1px solid #F59E0B33; }
+.br { background:#EF444418;color:#EF4444;border:1px solid #EF444433; }
 
-/* ── Buttons ─────────────────────────────────────────────────────── */
 .stButton>button {
-    background: #0A1628 !important;
-    color: #00D4FF !important;
-    border: 1px solid #00D4FF44 !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    letter-spacing: .5px !important;
-    transition: all .2s !important;
+    background:#0A1628 !important; color:#00D4FF !important;
+    border:1px solid #00D4FF44 !important; border-radius:8px !important;
+    font-weight:600 !important;
 }
 .stButton>button:hover {
-    background: #00D4FF !important;
-    color: #060B14 !important;
-    border-color: #00D4FF !important;
+    background:#00D4FF !important; color:#07090F !important;
+    border-color:#00D4FF !important;
 }
-
-/* ── File uploader ──────────────────────────────────────────────── */
 [data-testid="stFileUploader"] {
-    background: #111827 !important;
-    border: 1.5px dashed #1E3A5F !important;
-    border-radius: 12px !important;
+    background:#0F1623 !important; border:1.5px dashed #1A2A40 !important;
+    border-radius:12px !important;
 }
-[data-testid="stFileUploader"]:hover {
-    border-color: #00D4FF !important;
-}
-
-/* ── Tabs ───────────────────────────────────────────────────────── */
 .stTabs [data-baseweb="tab-list"] {
-    background: #0A0E1A !important;
-    border-bottom: 1px solid #1E3A5F !important;
-    gap: 4px;
+    background:#0A0E1A !important; border-bottom:1px solid #1A2A40 !important;
 }
 .stTabs [data-baseweb="tab"] {
-    background: transparent !important;
-    color: #64748B !important;
-    border-radius: 8px 8px 0 0 !important;
-    padding: 8px 20px !important;
-    font-weight: 600 !important;
-    font-size: 0.88rem !important;
+    background:transparent !important; color:#475569 !important;
+    border-radius:8px 8px 0 0 !important; padding:8px 20px !important;
+    font-weight:600 !important; font-size:0.88rem !important;
 }
 .stTabs [aria-selected="true"] {
-    background: #111827 !important;
-    color: #00D4FF !important;
-    border-bottom: 2px solid #00D4FF !important;
+    background:#0F1623 !important; color:#00D4FF !important;
+    border-bottom:2px solid #00D4FF !important;
 }
-
-/* ── Progress bar ───────────────────────────────────────────────── */
-.stProgress > div > div { background: #00D4FF !important; }
-
-/* ── Expander ───────────────────────────────────────────────────── */
+.stProgress > div > div { background:#00D4FF !important; }
 [data-testid="stExpander"] {
-    background: #111827 !important;
-    border: 1px solid #1E3A5F !important;
-    border-radius: 10px !important;
+    background:#0F1623 !important; border:1px solid #1A2A40 !important;
+    border-radius:10px !important;
 }
-
-/* ── Selectbox / slider ─────────────────────────────────────────── */
-[data-testid="stSelectbox"] > div > div,
-[data-testid="stMultiSelect"] > div > div {
-    background: #111827 !important;
-    border-color: #1E3A5F !important;
-    color: #F1F5F9 !important;
+.lbl-before { text-align:center; font-size:0.72rem; font-weight:700;
+              letter-spacing:2px; text-transform:uppercase;
+              color:#475569; padding:4px 0 6px; }
+.lbl-after  { text-align:center; font-size:0.72rem; font-weight:700;
+              letter-spacing:2px; text-transform:uppercase;
+              color:#00D4FF; padding:4px 0 6px; }
+.det-row {
+    display:flex; align-items:center; gap:8px;
+    padding:7px 10px; background:#07090F;
+    border-radius:7px; margin:3px 0; border-left:3px solid;
 }
-.stSlider [data-testid="stThumbValue"] { color: #00D4FF !important; }
-
-/* ── Image comparison ───────────────────────────────────────────── */
-.before-after-label {
-    text-align:center;
-    font-size:0.75rem;
-    font-weight:700;
-    letter-spacing:2px;
-    text-transform:uppercase;
-    padding:4px 0 8px;
+.header {
+    background:linear-gradient(135deg,#0A0E1A,#0D1B2A,#0A0E1A);
+    border:1px solid #1A2A40; border-top:3px solid #00D4FF;
+    border-radius:14px; padding:1.2rem 1.8rem;
+    display:flex; align-items:center;
+    justify-content:space-between; flex-wrap:wrap;
+    gap:1rem; margin-bottom:1.4rem;
 }
-.label-before { color:#64748B; }
-.label-after  { color:#00D4FF; }
-
-/* ── Detection item ─────────────────────────────────────────────── */
-.det-item {
-    display:flex;
-    align-items:center;
-    gap:10px;
-    padding:7px 12px;
-    background:#0A0E1A;
-    border-radius:8px;
-    margin:4px 0;
-    border-left:3px solid;
-}
-.det-class { font-weight:700; font-size:0.9rem; min-width:110px; }
-.det-conf  { font-size:0.8rem; color:#64748B; }
-.det-src   { font-size:0.72rem; padding:2px 7px; border-radius:4px;
-             background:#1E3A5F; color:#94A3B8; }
-
-/* ── Scrollable detection list ─────────────────────────────────── */
-.det-scroll {
-    max-height: 340px;
-    overflow-y: auto;
-    padding-right: 4px;
-}
-.det-scroll::-webkit-scrollbar { width:4px; }
-.det-scroll::-webkit-scrollbar-track { background:#0A0E1A; }
-.det-scroll::-webkit-scrollbar-thumb { background:#1E3A5F; border-radius:4px; }
-
-/* ── Header banner ──────────────────────────────────────────────── */
-.header-banner {
-    background: linear-gradient(135deg, #0A0E1A 0%, #0D1B2A 50%, #0A0E1A 100%);
-    border: 1px solid #1E3A5F;
-    border-top: 3px solid #00D4FF;
-    border-radius: 14px;
-    padding: 1.4rem 2rem;
-    margin-bottom: 1.5rem;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    flex-wrap:wrap;
-    gap:1rem;
-}
-.header-title { font-size:1.5rem; font-weight:800; color:#00D4FF; letter-spacing:1px; }
-.header-sub   { font-size:0.8rem; color:#64748B; margin-top:3px; letter-spacing:.5px; }
+.htitle { font-size:1.45rem; font-weight:800; color:#00D4FF; letter-spacing:1px; }
+.hsub   { font-size:0.78rem; color:#475569; margin-top:3px; letter-spacing:.5px; }
 </style>
-""", unsafe_allow_html=True)
+""",unsafe_allow_html =True )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PIPELINE IMPORT — graceful fallback if modules not installed
-# ══════════════════════════════════════════════════════════════════════════════
-@st.cache_resource(show_spinner=False)
-def load_pipeline():
-    try:
-        from pipeline.ingest       import load_frame, validate_frame
-        from pipeline.calibrate    import run_calibration, load_calibration
-        from pipeline.deterministic import (run_deterministic,
-                                             KalmanFrameFilter, BackgroundModel)
-        from pipeline.enhance      import enhance_frame, detect_image_type
-        from pipeline.detect       import (UnifiedDetector, draw_detections,
-                                           detections_to_json, COCO_CLASSES)
-        import yaml
-        with open(ROOT / "params.yaml") as f:
-            params = yaml.safe_load(f)
 
-        calib    = load_calibration(params.get("paths", {})
-                                    .get("calibration_dir", "data/calibration_assets"))
-        detector = UnifiedDetector(
-            yolo_model_size=params.get("detection", {}).get("yolo_model_size", "n"),
-            yolo_conf      =params.get("detection", {}).get("yolo_conf", 0.25),
-            use_thermal    =True,
-            device         =params.get("detection", {}).get("device", "cpu"),
+
+
+@st .cache_resource (show_spinner =False )
+def load_pipeline ():
+    try :
+        from pipeline .ingest import validate_frame 
+        from pipeline .calibrate import run_calibration ,load_calibration 
+        from pipeline .deterministic import (run_deterministic ,
+        KalmanFrameFilter ,BackgroundModel )
+        from pipeline .enhance import enhance_frame ,detect_image_type 
+        from pipeline .detect import (UnifiedDetector ,draw_detections ,
+        detections_to_json )
+        import yaml 
+        with open (ROOT /"params.yaml")as f :
+            params =yaml .safe_load (f )
+
+        calib_dir =params .get ("paths",{}).get ("calibration_dir",
+        "data/calibration_assets")
+        calib =load_calibration (calib_dir )
+        detector =UnifiedDetector (
+        yolo_model_size =params .get ("detection",{}).get ("yolo_model_size","n"),
+        yolo_conf =params .get ("detection",{}).get ("yolo_conf",0.40 ),
+        use_thermal =False ,
+        device =params .get ("detection",{}).get ("device","cpu"),
         )
-        return {
-            "ok": True,
-            "load_frame":       load_frame,
-            "validate_frame":   validate_frame,
-            "run_calibration":  run_calibration,
-            "run_deterministic":run_deterministic,
-            "enhance_frame":    enhance_frame,
-            "detect_image_type":detect_image_type,
-            "draw_detections":  draw_detections,
-            "detections_to_json":detections_to_json,
-            "KalmanFrameFilter":KalmanFrameFilter,
-            "BackgroundModel":  BackgroundModel,
-            "calib":            calib,
-            "detector":         detector,
-            "params":           params,
-            "coco_classes":     COCO_CLASSES,
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return dict (ok =True ,validate_frame =validate_frame ,
+        run_calibration =run_calibration ,calib =calib ,
+        run_deterministic =run_deterministic ,
+        KalmanFrameFilter =KalmanFrameFilter ,
+        BackgroundModel =BackgroundModel ,
+        enhance_frame =enhance_frame ,
+        detect_image_type =detect_image_type ,
+        draw_detections =draw_detections ,
+        detections_to_json =detections_to_json ,
+        detector =detector ,params =params )
+    except Exception as e :
+        import traceback 
+        return dict (ok =False ,error =str (e ),trace =traceback .format_exc ())
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CORE: process one image → returns dict
-# ══════════════════════════════════════════════════════════════════════════════
-def process_image(img_array: np.ndarray, pl: dict,
-                  conf_override: float = None,
-                  do_sr: bool = False) -> dict:
-    """Run full pipeline on a numpy array. Returns result dict."""
-
-    if conf_override is not None:
-        pl["detector"].yolo.conf = conf_override
-
-    t0 = time.perf_counter()
-
-    # Stage 1: Calibration
-    calibrated = pl["run_calibration"](img_array, calib=pl["calib"])
-
-    # Stage 2: Deterministic (stateless per-image — no cross-frame Kalman here)
-    kalman   = pl["KalmanFrameFilter"](shape=calibrated.shape[:2])
-    bg_model = pl["BackgroundModel"](alpha=0.05)
-    processed = pl["run_deterministic"](
-        calibrated, kalman=kalman, bg_model=bg_model,
-        params=pl["params"].get("deterministic", {}))
-
-    # Stage 3+4: Enhancement
-    meta     = pl["detect_image_type"](img_array)
-    enhanced = pl["enhance_frame"](processed, do_sr=do_sr, return_8bit=True)
-
-    # Stage 5: Detection
-    detections = pl["detector"].detect(enhanced, is_thermal=meta["is_thermal"])
-    det_json   = pl["detections_to_json"](detections)
-
-    # Annotated output
-    annotated = pl["draw_detections"](enhanced, detections)
-
-    elapsed_ms = (time.perf_counter() - t0) * 1000
-
-    return {
-        "original":    img_array,
-        "enhanced":    enhanced,
-        "annotated":   annotated,
-        "detections":  det_json,
-        "elapsed_ms":  elapsed_ms,
-        "meta":        meta,
-    }
 
 
-def np_to_pil(arr: np.ndarray) -> Image.Image:
-    if arr.dtype != np.uint8:
-        arr = cv2.normalize(arr, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    if arr.ndim == 2:
-        return Image.fromarray(arr, mode="L")
-    return Image.fromarray(cv2.cvtColor(arr, cv2.COLOR_BGR2RGB))
+
+def run_pipeline (frame :np .ndarray ,pl :dict ,
+conf :float ,do_sr :bool ,
+use_thermal :bool )->dict :
+    t0 =time .perf_counter ()
 
 
-def pil_to_np(img: Image.Image) -> np.ndarray:
-    arr = np.array(img)
-    if arr.ndim == 3 and arr.shape[2] == 3:
-        arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-    return arr.astype(np.float32)
+    pl ["detector"].conf =conf 
+    pl ["detector"].use_thermal =use_thermal 
 
 
-def img_to_bytes(arr: np.ndarray, fmt: str = "PNG") -> bytes:
-    pil = np_to_pil(arr)
-    buf = io.BytesIO()
-    pil.save(buf, format=fmt)
-    return buf.getvalue()
+    calibrated =pl ["run_calibration"](frame ,calib =pl ["calib"])
 
 
-# ── Detection class → badge colour ───────────────────────────────────────────
-CLASS_COLOURS = {
-    "person":"badge-green", "car":"badge-yell", "truck":"badge-yell",
-    "bus":"badge-yell",     "motorcycle":"badge-cyan","bicycle":"badge-cyan",
-    "airplane":"badge-blue","train":"badge-blue","boat":"badge-blue",
-    "hotspot":"badge-red",  "fire":"badge-red", "heat_source":"badge-red",
-    "anomaly":"badge-purp", "cold_region":"badge-blue",
-    "dog":"badge-green",    "cat":"badge-green","bird":"badge-green",
+    kal =pl ["KalmanFrameFilter"](shape =calibrated .shape [:2 ])
+
+
+    processed =pl ["run_deterministic"](
+    calibrated ,kalman =kal ,bg_model =None ,
+    params =pl ["params"].get ("deterministic",{}))
+
+
+    enhanced =pl ["enhance_frame"](processed ,do_sr =do_sr ,return_8bit =True ,params =pl ["params"].get ("enhance",{}))
+
+
+    meta =pl ["detect_image_type"](frame )
+    dets =pl ["detector"].detect (enhanced ,is_thermal =meta ["is_thermal"])
+    det_json =pl ["detections_to_json"](dets )
+
+
+    annotated =pl ["draw_detections"](enhanced ,dets )
+    elapsed =(time .perf_counter ()-t0 )*1000 
+
+    return dict (original =frame ,enhanced =enhanced ,
+    annotated =annotated ,detections =det_json ,
+    elapsed_ms =elapsed ,meta =meta )
+
+
+def to_pil (arr :np .ndarray )->Image .Image :
+    if arr .dtype !=np .uint8 :
+        arr =cv2 .normalize (arr ,None ,0 ,255 ,cv2 .NORM_MINMAX ).astype (np .uint8 )
+    if arr .ndim ==2 :
+        return Image .fromarray (arr )
+    return Image .fromarray (cv2 .cvtColor (arr ,cv2 .COLOR_BGR2RGB ))
+
+
+def to_bytes (arr :np .ndarray ,fmt ="PNG")->bytes :
+    buf =io .BytesIO ()
+    to_pil (arr ).save (buf ,format =fmt )
+    return buf .getvalue ()
+
+
+def load_uploaded (uf )->np .ndarray :
+    """Load any uploaded file → float32 2D grayscale array.
+    Forces grayscale so the deterministic pipeline always gets (H,W) input.
+    Handles: RGB, RGBA, L, P, 16-bit TIFF, NPY.
+    """
+    if uf .name .endswith (".npy"):
+        arr =np .load (io .BytesIO (uf .read ()))
+        if arr .ndim ==3 :
+
+            arr =arr .mean (axis =2 )
+        return arr .astype (np .float32 )
+    pil =Image .open (uf )
+
+    pil =pil .convert ("L")
+    return np .array (pil ).astype (np .float32 )
+
+
+DET_COLORS ={
+"Person":"#22C55E",
+"Vehicle":"#00D4FF",
+"Motorcycle":"#00D4FF",
+"Bicycle":"#A3E635",
+"Aircraft":"#F59E0B",
+"Watercraft":"#FB923C",
+"Animal":"#C084FC",
+"Screen":"#818CF8",
+"Hotspot":"#EF4444",
 }
-BORDER_COLOURS = {
-    "badge-green":"#10B981","badge-yell":"#F59E0B","badge-cyan":"#00D4FF",
-    "badge-red":"#EF4444",  "badge-blue":"#3B82F6","badge-purp":"#8B5CF6",
-}
-def cls_badge(name: str) -> str:
-    bc = CLASS_COLOURS.get(name, "badge-cyan")
-    return f'<span class="badge {bc}">{name}</span>'
-
-def det_border(name: str) -> str:
-    bc = CLASS_COLOURS.get(name, "badge-cyan")
-    return BORDER_COLOURS.get(bc, "#00D4FF")
+def dcolor (label ):return DET_COLORS .get (label ,"#94A3B8")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR
-# ══════════════════════════════════════════════════════════════════════════════
-def render_sidebar(pl: dict) -> dict:
-    with st.sidebar:
-        st.markdown("""
-        <div style="padding:12px 0 16px;">
-          <div style="font-size:1.1rem;font-weight:800;color:#00D4FF;letter-spacing:1px;">
-            🌡️ IR PIPELINE
-          </div>
-          <div style="font-size:0.72rem;color:#334155;letter-spacing:1.5px;
-                      text-transform:uppercase;margin-top:2px;">
-            DRDO SSPL · v2.0
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("---")
-        st.markdown('<p style="font-size:0.75rem;font-weight:700;color:#64748B;'
-                    'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">'
-                    'DETECTION SETTINGS</p>', unsafe_allow_html=True)
-
-        conf = st.slider("Confidence threshold", 0.10, 0.90, 0.25, 0.05,
-                          help="Lower → more detections. Higher → stricter.")
-        iou  = st.slider("NMS IoU threshold",    0.10, 0.80, 0.45, 0.05,
-                          help="Controls overlap removal between boxes.")
-
-        model_size = st.selectbox(
-            "YOLOv8 model size",
-            ["n (nano — fastest)", "s (small)", "m (medium)"],
-            index=0,
-            help="Larger = more accurate but slower"
-        ).split()[0]
-
-        st.markdown("---")
-        st.markdown('<p style="font-size:0.75rem;font-weight:700;color:#64748B;'
-                    'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">'
-                    'ENHANCEMENT</p>', unsafe_allow_html=True)
-
-        do_sr = st.toggle("Super-resolution ×2", value=False,
-                           help="Requires EDSR_x2.pb in models/. Much slower.")
-        show_raw = st.toggle("Show raw frame alongside", value=True)
-
-        st.markdown("---")
-        st.markdown('<p style="font-size:0.75rem;font-weight:700;color:#64748B;'
-                    'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">'
-                    'OUTPUT FORMAT</p>', unsafe_allow_html=True)
-        out_fmt = st.radio("Download format", ["PNG", "JPEG"], horizontal=True)
-
-        st.markdown("---")
-
-        # Pipeline status
-        if pl["ok"]:
-            st.markdown("""
-            <div class="ir-card ir-card-accent-green" style="padding:10px 12px;">
-              <div style="font-size:0.72rem;font-weight:700;color:#10B981;
-                          letter-spacing:1.5px;text-transform:uppercase;">
-                ✓ PIPELINE READY
-              </div>
-              <div style="font-size:0.75rem;color:#64748B;margin-top:4px;">
-                YOLO loaded · 85 classes
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.error(f"Pipeline error:\n{pl.get('error','unknown')}")
-            st.markdown("Run: `pip install -r requirements.txt`")
-
-        st.markdown("---")
-        st.markdown('<p style="font-size:0.7rem;color:#334155;text-align:center;">'
-                    'ML + DL + MLOps · Self-hosted</p>', unsafe_allow_html=True)
-
-    return {"conf": conf, "iou": iou, "model_size": model_size,
-            "do_sr": do_sr, "show_raw": show_raw, "out_fmt": out_fmt}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# RESULT DISPLAY COMPONENTS
-# ══════════════════════════════════════════════════════════════════════════════
-def render_before_after(result: dict, settings: dict, fname: str = "image"):
-    """Show before/after comparison + metrics + detections."""
-    original   = result["original"]
-    annotated  = result["annotated"]
-    detections = result["detections"]
-    elapsed    = result["elapsed_ms"]
 
-    # ── Before / After images ─────────────────────────────────────────────────
-    if settings["show_raw"]:
-        col_orig, col_enh = st.columns(2, gap="medium")
-        with col_orig:
-            st.markdown('<p class="before-after-label label-before">RAW INPUT</p>',
-                        unsafe_allow_html=True)
-            st.image(np_to_pil(original.astype(np.float32)
-                     if original.dtype != np.uint8 else original),
-                     use_container_width=True)
-        with col_enh:
-            st.markdown('<p class="before-after-label label-after">ENHANCED + DETECTED</p>',
-                        unsafe_allow_html=True)
-            st.image(np_to_pil(annotated), use_container_width=True)
-    else:
-        st.markdown('<p class="before-after-label label-after">ENHANCED + DETECTED</p>',
-                    unsafe_allow_html=True)
-        st.image(np_to_pil(annotated), use_container_width=True)
+def show_result (result :dict ,settings :dict ,fname :str ="image"):
+    dets =result ["detections"]
+    n =dets ["count"]
+    elapsed =result ["elapsed_ms"]
+    fmt =settings ["fmt"]
 
-    # ── Metric tiles ──────────────────────────────────────────────────────────
-    n_det   = detections["count"]
-    classes = list({d["label"] for d in detections["detections"]})
-    yolo_c  = sum(1 for d in detections["detections"] if d["source"] == "yolo")
-    therm_c = sum(1 for d in detections["detections"] if d["source"] == "thermal")
 
-    st.markdown(f"""
+    if settings ["show_raw"]:
+        c1 ,c2 =st .columns (2 ,gap ="medium")
+        with c1 :
+            st .markdown ('<p class="lbl-before">RAW INPUT</p>',
+            unsafe_allow_html =True )
+            st .image (to_pil (result ["original"]),use_container_width =True )
+        with c2 :
+            st .markdown ('<p class="lbl-after">ENHANCED + DETECTED</p>',
+            unsafe_allow_html =True )
+            st .image (to_pil (result ["annotated"]),use_container_width =True )
+    else :
+        st .markdown ('<p class="lbl-after">ENHANCED + DETECTED</p>',
+        unsafe_allow_html =True )
+        st .image (to_pil (result ["annotated"]),use_container_width =True )
+
+
+    classes =list ({d ["label"]for d in dets ["detections"]})
+    st .markdown (f"""
     <div class="metric-row">
       <div class="metric-tile">
-        <div class="val" style="color:#00D4FF;">{n_det}</div>
-        <div class="lbl">Objects Found</div>
+        <div class="val" style="color:#00D4FF;">{n }</div>
+        <div class="lbl">Objects</div>
       </div>
       <div class="metric-tile">
-        <div class="val" style="color:#10B981;">{len(classes)}</div>
-        <div class="lbl">Unique Classes</div>
+        <div class="val" style="color:#22C55E;">{len (classes )}</div>
+        <div class="lbl">Classes</div>
       </div>
       <div class="metric-tile">
-        <div class="val" style="color:#8B5CF6;">{yolo_c}</div>
-        <div class="lbl">YOLO Detections</div>
-      </div>
-      <div class="metric-tile">
-        <div class="val" style="color:#EF4444;">{therm_c}</div>
-        <div class="lbl">Thermal Detections</div>
-      </div>
-      <div class="metric-tile">
-        <div class="val" style="color:#F59E0B;">{elapsed:.0f}<span style="font-size:1rem;">ms</span></div>
+        <div class="val" style="color:#F59E0B;">{elapsed :.0f}<span style="font-size:.9rem">ms</span></div>
         <div class="lbl">Process Time</div>
       </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,unsafe_allow_html =True )
 
-    # ── Detection list + download ─────────────────────────────────────────────
-    dcol, djcol = st.columns([3, 2], gap="medium")
 
-    with dcol:
-        st.markdown('<div class="ir-card ir-card-accent-cyan">', unsafe_allow_html=True)
-        st.markdown(f'<p style="font-size:0.75rem;font-weight:700;color:#00D4FF;'
-                    f'letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;">'
-                    f'DETECTED OBJECTS — {n_det} total</p>', unsafe_allow_html=True)
+    dl ,dr =st .columns ([3 ,2 ],gap ="medium")
 
-        if n_det == 0:
-            st.markdown('<p style="color:#334155;font-size:0.85rem;">'
-                        'No objects detected. Try lowering the confidence threshold.</p>',
-                        unsafe_allow_html=True)
-        else:
-            items_html = '<div class="det-scroll">'
-            for d in sorted(detections["detections"],
-                            key=lambda x: x["confidence"], reverse=True):
-                border = det_border(d["label"])
-                conf_pct = int(d["confidence"] * 100)
-                src_txt  = "YOLO" if d["source"] == "yolo" else "THERMAL"
-                items_html += f"""
-                <div class="det-item" style="border-left-color:{border};">
-                  <div class="det-class" style="color:{border};">{d['label']}</div>
+    with dl :
+        st .markdown ('<div class="card card-cyan">',unsafe_allow_html =True )
+        st .markdown (f'<p style="font-size:.73rem;font-weight:700;color:#00D4FF;'
+        f'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">'
+        f'DETECTIONS — {n } objects</p>',unsafe_allow_html =True )
+
+        if n ==0 :
+            st .markdown ('<p style="color:#334155;font-size:.85rem;">No objects found. '
+            'Try lowering the confidence threshold in the sidebar.</p>',
+            unsafe_allow_html =True )
+        else :
+            items =""
+            for d in sorted (dets ["detections"],
+            key =lambda x :x ["confidence"],reverse =True ):
+                c =dcolor (d ["label"])
+                pct =int (d ["confidence"]*100 )
+                items +=f"""
+                <div class="det-row" style="border-left-color:{c };">
+                  <div style="font-weight:700;color:{c };min-width:100px;
+                              font-size:.88rem;">{d ['label']}</div>
                   <div style="flex:1;">
-                    <div style="background:#1E3A5F;border-radius:3px;height:4px;width:100%;">
-                      <div style="background:{border};height:4px;border-radius:3px;
-                                  width:{conf_pct}%;"></div>
-                    </div>
-                  </div>
-                  <div class="det-conf">{conf_pct}%</div>
-                  <div class="det-src">{src_txt}</div>
+                    <div style="background:#1A2A40;border-radius:3px;height:4px;">
+                      <div style="background:{c };height:4px;border-radius:3px;
+                                  width:{pct }%;"></div></div></div>
+                  <div style="font-size:.78rem;color:#475569;">{pct }%</div>
+                  <div style="font-size:.7rem;background:#1A2A40;padding:2px 6px;
+                              border-radius:4px;color:#94A3B8;">{d ['source'].upper ()}</div>
                 </div>"""
-            items_html += '</div>'
-            st.markdown(items_html, unsafe_allow_html=True)
+            st .markdown (
+            f'<div style="max-height:300px;overflow-y:auto;">{items }</div>',
+            unsafe_allow_html =True )
+        st .markdown ("</div>",unsafe_allow_html =True )
 
-        st.markdown('</div>', unsafe_allow_html=True)
+    with dr :
+        st .markdown ('<div class="card card-yell">',unsafe_allow_html =True )
+        st .markdown ('<p style="font-size:.73rem;font-weight:700;color:#F59E0B;'
+        'letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">'
+        'DOWNLOADS</p>',unsafe_allow_html =True )
 
-    with djcol:
-        st.markdown('<div class="ir-card ir-card-accent-purp">', unsafe_allow_html=True)
-        st.markdown('<p style="font-size:0.75rem;font-weight:700;color:#8B5CF6;'
-                    'letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;">'
-                    'DOWNLOAD RESULTS</p>', unsafe_allow_html=True)
-
-        # Download enhanced image
-        fmt      = settings.get("out_fmt", "PNG")
-        img_bytes = img_to_bytes(annotated, fmt=fmt)
-        st.download_button(
-            label=f"⬇ Download Enhanced Image ({fmt})",
-            data=img_bytes,
-            file_name=f"{Path(fname).stem}_enhanced.{fmt.lower()}",
-            mime=f"image/{fmt.lower()}",
-            use_container_width=True,
+        stem =Path (fname ).stem 
+        st .download_button (
+        f"⬇  Enhanced image ({fmt })",
+        data =to_bytes (result ["annotated"],fmt ),
+        file_name =f"{stem }_enhanced.{fmt .lower ()}",
+        mime =f"image/{fmt .lower ()}",
+        use_container_width =True ,
         )
-
-        # Download JSON detections
-        json_bytes = json.dumps(detections, indent=2).encode()
-        st.download_button(
-            label="⬇ Download Detections (JSON)",
-            data=json_bytes,
-            file_name=f"{Path(fname).stem}_detections.json",
-            mime="application/json",
-            use_container_width=True,
+        st .download_button (
+        "⬇  Detections JSON",
+        data =json .dumps (dets ,indent =2 ).encode (),
+        file_name =f"{stem }_detections.json",
+        mime ="application/json",
+        use_container_width =True ,
         )
-        st.markdown('</div>', unsafe_allow_html=True)
+        st .markdown ("</div>",unsafe_allow_html =True )
 
-        # Raw JSON expander
-        with st.expander("View raw detection JSON"):
-            st.json(detections)
+        with st .expander ("Raw JSON"):
+            st .json (dets )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — SINGLE IMAGE
-# ══════════════════════════════════════════════════════════════════════════════
-def tab_single(pl: dict, settings: dict):
-    st.markdown("""
-    <div class="ir-card ir-card-accent-cyan">
-      <p style="font-size:0.8rem;color:#94A3B8;margin:0;">
-        Upload any image — thermal TIFF, PNG, JPEG, 16-bit RAW.
-        The pipeline auto-detects image type and applies appropriate processing.
-      </p>
-    </div>
-    """, unsafe_allow_html=True)
 
-    uploaded = st.file_uploader(
-        "Drop an image here or click to browse",
-        type=["png", "jpg", "jpeg", "tiff", "tif", "bmp", "npy"],
-        label_visibility="collapsed",
+
+
+def sidebar (pl ):
+    with st .sidebar :
+        st .markdown ("""
+        <div style="padding:10px 0 14px;">
+          <div style="font-size:1.05rem;font-weight:800;color:#00D4FF;letter-spacing:1px;">
+            🌡️ IR PIPELINE
+          </div>
+          <div style="font-size:.7rem;color:#334155;letter-spacing:1.5px;
+                      text-transform:uppercase;margin-top:2px;">
+            DRDO SSPL · v2.0
+          </div>
+        </div>""",unsafe_allow_html =True )
+
+        st .markdown ("---")
+        st .markdown ('<p style="font-size:.72rem;font-weight:700;color:#475569;'
+        'letter-spacing:2px;text-transform:uppercase;">DETECTION</p>',
+        unsafe_allow_html =True )
+
+        conf =st .slider ("Confidence",0.10 ,0.90 ,0.40 ,0.05 ,
+        help ="Raise to reduce false positives. Lower to catch more.")
+        use_thermal =st .toggle ("Thermal hotspot detector",value =False ,
+        help ="Adds large-area hotspot detection. Leave OFF for normal photos.")
+        show_raw =st .toggle ("Show raw frame",value =True )
+
+        st .markdown ("---")
+        st .markdown ('<p style="font-size:.72rem;font-weight:700;color:#475569;'
+        'letter-spacing:2px;text-transform:uppercase;">ENHANCEMENT</p>',
+        unsafe_allow_html =True )
+        do_sr =st .toggle ("Super-resolution ×2",value =False ,
+        help ="Needs models/EDSR_x2.pb. Much slower.")
+
+        st .markdown ("---")
+        fmt =st .radio ("Download format",["PNG","JPEG"],horizontal =True )
+
+        st .markdown ("---")
+        if pl ["ok"]:
+            st .markdown ("""
+            <div class="card card-green" style="padding:9px 11px;">
+              <div style="font-size:.7rem;font-weight:700;color:#22C55E;
+                          letter-spacing:1.5px;text-transform:uppercase;">
+                ✓ PIPELINE READY
+              </div>
+              <div style="font-size:.73rem;color:#475569;margin-top:3px;">
+                YOLOv8 · 8 display classes
+              </div>
+            </div>""",unsafe_allow_html =True )
+        else :
+            st .error (f"Pipeline error — see console")
+            with st .expander ("Error details"):
+                st .code (pl .get ("trace",pl .get ("error","")))
+
+    return dict (conf =conf ,use_thermal =use_thermal ,
+    show_raw =show_raw ,do_sr =do_sr ,fmt =fmt )
+
+
+
+
+
+def tab_single (pl ,s ):
+    st .markdown ('<div class="card card-cyan"><p style="font-size:.82rem;'
+    'color:#94A3B8;margin:0;">Upload any image — PNG, JPEG, 16-bit TIFF, NPY. '
+    'Pipeline auto-adapts to image type.</p></div>',
+    unsafe_allow_html =True )
+
+    uf =st .file_uploader (
+    "Drop image here",
+    type =["png","jpg","jpeg","tiff","tif","bmp","npy"],
+    label_visibility ="collapsed",
     )
 
-    if uploaded is None:
-        # Placeholder state
-        st.markdown("""
-        <div style="text-align:center;padding:3rem 1rem;
-                    border:1.5px dashed #1E3A5F;border-radius:12px;
+    if uf is None :
+        st .markdown ("""
+        <div style="text-align:center;padding:3.5rem 1rem;
+                    border:1.5px dashed #1A2A40;border-radius:12px;
                     background:#0A0E1A;margin-top:1rem;">
-          <div style="font-size:3rem;margin-bottom:12px;">🌡️</div>
-          <div style="font-size:1rem;font-weight:600;color:#334155;margin-bottom:6px;">
-            No image uploaded yet
-          </div>
-          <div style="font-size:0.8rem;color:#1E3A5F;">
-            Supports: PNG · JPEG · TIFF (16-bit) · BMP · NPY
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-        return
+          <div style="font-size:2.5rem;margin-bottom:10px;">🌡️</div>
+          <div style="font-size:.95rem;font-weight:600;color:#334155;">
+            No image uploaded</div>
+          <div style="font-size:.78rem;color:#1A2A40;margin-top:4px;">
+            PNG · JPEG · TIFF · BMP · NPY</div>
+        </div>""",unsafe_allow_html =True )
+        return 
 
-    if not pl["ok"]:
-        st.error("Pipeline not loaded. Check requirements.txt installation.")
-        return
+    if not pl ["ok"]:
+        st .error ("Pipeline not loaded. Run: pip install -r requirements.txt")
+        return 
 
-    # Load image
-    try:
-        if uploaded.name.endswith(".npy"):
-            frame = np.load(io.BytesIO(uploaded.read())).astype(np.float32)
-        else:
-            pil   = Image.open(uploaded).convert("L")    # grayscale
-            frame = np.array(pil).astype(np.float32)
-    except Exception as e:
-        st.error(f"Could not load image: {e}")
-        return
+    try :
+        frame =load_uploaded (uf )
+    except Exception as e :
+        st .error (f"Could not load image: {e }")
+        return 
 
-    valid, reason = pl["validate_frame"](frame)
-    if not valid:
-        st.error(f"Invalid image: {reason}")
-        return
+    valid ,reason =pl ["validate_frame"](frame )
+    if not valid :
+        st .error (f"Invalid image: {reason }")
+        return 
 
-    # Info bar
-    h, w = frame.shape[:2]
-    st.markdown(f"""
-    <div style="display:flex;gap:8px;align-items:center;margin:10px 0 16px;flex-wrap:wrap;">
-      <span class="badge badge-cyan">📄 {uploaded.name}</span>
-      <span class="badge badge-blue">{w}×{h}px</span>
-      <span class="badge badge-purp">{frame.dtype}</span>
-      <span class="badge badge-green">range {frame.min():.0f}–{frame.max():.0f}</span>
-    </div>
-    """, unsafe_allow_html=True)
+    h ,w =frame .shape [:2 ]
+    st .markdown (f"""
+    <div style="display:flex;gap:6px;align-items:center;margin:8px 0 14px;flex-wrap:wrap;">
+      <span class="badge bc">📄 {uf .name }</span>
+      <span class="badge bc">{w }×{h }</span>
+      <span class="badge bc">{frame .dtype }</span>
+      <span class="badge bg">range {frame .min ():.0f}–{frame .max ():.0f}</span>
+    </div>""",unsafe_allow_html =True )
 
-    # Process button
-    col_btn, col_sp = st.columns([2, 5])
-    with col_btn:
-        run = st.button("▶  Run Pipeline", use_container_width=True)
+    cb ,_ =st .columns ([2 ,5 ])
+    with cb :
+        run =st .button ("▶  Run Pipeline",use_container_width =True )
 
-    if run:
-        with st.spinner("Running 5-stage pipeline..."):
-            try:
-                result = process_image(
-                    frame, pl,
-                    conf_override=settings["conf"],
-                    do_sr=settings["do_sr"],
-                )
-            except Exception as e:
-                st.error(f"Pipeline error: {e}")
-                import traceback
-                st.code(traceback.format_exc())
-                return
-
-        st.success(f"Done in {result['elapsed_ms']:.0f} ms")
-        st.markdown("---")
-        render_before_after(result, settings, fname=uploaded.name)
+    if run :
+        with st .spinner ("Enhancing + detecting…"):
+            try :
+                result =run_pipeline (frame ,pl ,
+                conf =s ["conf"],do_sr =s ["do_sr"],
+                use_thermal =s ["use_thermal"])
+            except Exception as e :
+                import traceback 
+                st .error (f"Pipeline error: {e }")
+                st .code (traceback .format_exc ())
+                return 
+        st .success (f"✓ Done in {result ['elapsed_ms']:.0f} ms")
+        st .markdown ("---")
+        show_result (result ,s ,fname =uf .name )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — BATCH UPLOAD
-# ══════════════════════════════════════════════════════════════════════════════
-def tab_batch(pl: dict, settings: dict):
-    st.markdown("""
-    <div class="ir-card ir-card-accent-yell">
-      <p style="font-size:0.8rem;color:#94A3B8;margin:0;">
-        Upload multiple images at once. All are processed through the full pipeline.
-        Download all results as a ZIP when complete.
-      </p>
-    </div>
-    """, unsafe_allow_html=True)
+def tab_batch (pl ,s ):
+    st .markdown ('<div class="card card-yell"><p style="font-size:.82rem;'
+    'color:#94A3B8;margin:0;">Upload multiple images. '
+    'All processed through the full pipeline. '
+    'Download all as ZIP when complete.</p></div>',
+    unsafe_allow_html =True )
 
-    uploaded_files = st.file_uploader(
-        "Drop images here or click to browse — select as many as you want",
-        type=["png", "jpg", "jpeg", "tiff", "tif", "bmp", "npy"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
+    ufs =st .file_uploader (
+    "Drop images here — select many with Ctrl+Click",
+    type =["png","jpg","jpeg","tiff","tif","bmp","npy"],
+    accept_multiple_files =True ,
+    label_visibility ="collapsed",
     )
 
-    if not uploaded_files:
-        st.markdown("""
-        <div style="text-align:center;padding:3rem 1rem;
-                    border:1.5px dashed #1E3A5F;border-radius:12px;
+    if not ufs :
+        st .markdown ("""
+        <div style="text-align:center;padding:3.5rem 1rem;
+                    border:1.5px dashed #1A2A40;border-radius:12px;
                     background:#0A0E1A;margin-top:1rem;">
-          <div style="font-size:3rem;margin-bottom:12px;">📁</div>
-          <div style="font-size:1rem;font-weight:600;color:#334155;margin-bottom:6px;">
-            No images uploaded yet
-          </div>
-          <div style="font-size:0.8rem;color:#1E3A5F;">
-            Select multiple files with Ctrl+Click / Cmd+Click
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-        return
+          <div style="font-size:2.5rem;margin-bottom:10px;">📁</div>
+          <div style="font-size:.95rem;font-weight:600;color:#334155;">
+            No files uploaded</div>
+          <div style="font-size:.78rem;color:#1A2A40;margin-top:4px;">
+            Ctrl+Click to select multiple files</div>
+        </div>""",unsafe_allow_html =True )
+        return 
 
-    if not pl["ok"]:
-        st.error("Pipeline not loaded.")
-        return
+    if not pl ["ok"]:
+        st .error ("Pipeline not loaded.")
+        return 
 
-    # File summary
-    total = len(uploaded_files)
-    st.markdown(f"""
-    <div style="display:flex;gap:8px;align-items:center;margin:10px 0 16px;flex-wrap:wrap;">
-      <span class="badge badge-cyan">📁 {total} files queued</span>
-      {"".join(f'<span class="badge badge-blue">{f.name[:24]}</span>'
-               for f in uploaded_files[:6])}
-      {'<span class="badge badge-purp">…and more</span>' if total > 6 else ''}
-    </div>
-    """, unsafe_allow_html=True)
+    total =len (ufs )
+    st .markdown (f'<span class="badge bc">📁 {total } files queued</span>'
+    +"".join (f'<span class="badge bc">{f .name [:20 ]}</span>'
+    for f in ufs [:5 ])
+    +('<span class="badge by">+more</span>'if total >5 else ""),
+    unsafe_allow_html =True )
 
-    # Options row
-    ocol1, ocol2, ocol3 = st.columns(3)
-    with ocol1:
-        show_each = st.toggle("Show each result inline", value=(total <= 10),
-                               help="Disable for large batches to save memory.")
-    with ocol2:
-        stop_on_error = st.toggle("Stop on first error", value=False)
-    with ocol3:
-        run_batch = st.button("▶  Process All Images", use_container_width=True)
+    oc1 ,oc2 ,oc3 =st .columns (3 )
+    with oc1 :
+        show_each =st .toggle ("Show each result",value =(total <=8 ))
+    with oc2 :
+        stop_err =st .toggle ("Stop on error",value =False )
+    with oc3 :
+        go =st .button ("▶  Process All",use_container_width =True )
 
-    if not run_batch:
-        return
+    if not go :
+        return 
 
-    # ── RUN BATCH ────────────────────────────────────────────────────────────
-    progress_bar   = st.progress(0, text="Starting...")
-    status_text    = st.empty()
-    results_container = st.container()
+    prog =st .progress (0 ,text ="Starting…")
+    stat =st .empty ()
+    box =st .container ()
+    batch =[]
+    zip_buf =io .BytesIO ()
+    fmt =s ["fmt"]
 
-    batch_results  = []   # (fname, result | None, error | None)
-    zip_buffer     = io.BytesIO()
-    fmt            = settings.get("out_fmt", "PNG")
+    with zipfile .ZipFile (zip_buf ,"w",zipfile .ZIP_DEFLATED )as zf :
+        for i ,uf in enumerate (ufs ):
+            prog .progress ((i +1 )/total ,
+            text =f"Processing {i +1 }/{total }: {uf .name }")
+            stat .markdown (f'<span style="font-size:.82rem;color:#475569;">'
+            f'⚡ {uf .name }</span>',unsafe_allow_html =True )
+            try :
+                frame =load_uploaded (uf )
+                valid ,reason =pl ["validate_frame"](frame )
+                if not valid :
+                    raise ValueError (reason )
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i, uf in enumerate(uploaded_files):
-            pct  = (i + 1) / total
-            progress_bar.progress(pct,
-                text=f"Processing {i+1}/{total}: {uf.name}")
-            status_text.markdown(
-                f'<span style="color:#64748B;font-size:0.85rem;">'
-                f'⚡ {uf.name}</span>', unsafe_allow_html=True)
+                result =run_pipeline (frame ,pl ,conf =s ["conf"],
+                do_sr =s ["do_sr"],
+                use_thermal =s ["use_thermal"])
+                batch .append ((uf .name ,result ,None ))
 
-            try:
-                # Load
-                if uf.name.endswith(".npy"):
-                    frame = np.load(io.BytesIO(uf.read())).astype(np.float32)
-                else:
-                    pil   = Image.open(uf).convert("L")
-                    frame = np.array(pil).astype(np.float32)
+                stem =Path (uf .name ).stem 
+                zf .writestr (f"enhanced/{stem }_enhanced.{fmt .lower ()}",
+                to_bytes (result ["annotated"],fmt ))
+                zf .writestr (f"detections/{stem }.json",
+                json .dumps (result ["detections"],indent =2 ))
 
-                valid, reason = pl["validate_frame"](frame)
-                if not valid:
-                    raise ValueError(f"Invalid: {reason}")
+                if show_each :
+                    with box :
+                        with st .expander (
+                        f"✅ {uf .name } — "
+                        f"{result ['detections']['count']} objects — "
+                        f"{result ['elapsed_ms']:.0f}ms",
+                        expanded =(total <=4 )):
+                            show_result (result ,s ,fname =uf .name )
+            except Exception as e :
+                batch .append ((uf .name ,None ,str (e )))
+                if show_each :
+                    with box :
+                        st .error (f"❌ {uf .name }: {e }")
+                if stop_err :
+                    break 
 
-                result = process_image(frame, pl,
-                                       conf_override=settings["conf"],
-                                       do_sr=settings["do_sr"])
-                batch_results.append((uf.name, result, None))
+    prog .progress (1.0 ,text ="Complete!")
+    stat .empty ()
 
-                # Add to ZIP
-                stem  = Path(uf.name).stem
-                img_b = img_to_bytes(result["annotated"], fmt=fmt)
-                zf.writestr(f"enhanced/{stem}_enhanced.{fmt.lower()}", img_b)
-                det_b = json.dumps(result["detections"], indent=2).encode()
-                zf.writestr(f"detections/{stem}_detections.json", det_b)
+    ok_n =sum (1 for _ ,r ,_ in batch if r )
+    err_n =sum (1 for _ ,_ ,e in batch if e )
+    tot_d =sum (r ["detections"]["count"]for _ ,r ,_ in batch if r )
+    avg_t =(sum (r ["elapsed_ms"]for _ ,r ,_ in batch if r )
+    /max (ok_n ,1 ))
 
-                # Inline preview
-                if show_each:
-                    with results_container:
-                        with st.expander(
-                            f"✅ {uf.name}  —  "
-                            f"{result['detections']['count']} objects  |  "
-                            f"{result['elapsed_ms']:.0f} ms",
-                            expanded=(total <= 5)
-                        ):
-                            render_before_after(result, settings, fname=uf.name)
-
-            except Exception as e:
-                batch_results.append((uf.name, None, str(e)))
-                if show_each:
-                    with results_container:
-                        st.error(f"❌ {uf.name}: {e}")
-                if stop_on_error:
-                    break
-
-    progress_bar.progress(1.0, text="Complete!")
-    status_text.empty()
-
-    # ── Summary ───────────────────────────────────────────────────────────────
-    ok_count  = sum(1 for _, r, e in batch_results if r is not None)
-    err_count = sum(1 for _, r, e in batch_results if e is not None)
-    total_det = sum(r["detections"]["count"]
-                    for _, r, e in batch_results if r is not None)
-
-    st.markdown(f"""
-    <div class="metric-row" style="margin-top:1.5rem;">
+    st .markdown (f"""
+    <div class="metric-row" style="margin-top:1.2rem;">
       <div class="metric-tile">
-        <div class="val" style="color:#00D4FF;">{ok_count}</div>
-        <div class="lbl">Processed</div>
+        <div class="val" style="color:#00D4FF;">{ok_n }</div>
+        <div class="lbl">Done</div>
       </div>
       <div class="metric-tile">
-        <div class="val" style="color:#EF4444;">{err_count}</div>
+        <div class="val" style="color:#EF4444;">{err_n }</div>
         <div class="lbl">Errors</div>
       </div>
       <div class="metric-tile">
-        <div class="val" style="color:#10B981;">{total_det}</div>
-        <div class="lbl">Total Objects</div>
+        <div class="val" style="color:#22C55E;">{tot_d }</div>
+        <div class="lbl">Objects Found</div>
       </div>
       <div class="metric-tile">
-        <div class="val" style="color:#F59E0B;">
-          {sum(r['elapsed_ms'] for _,r,e in batch_results if r)/max(ok_count,1):.0f}
-          <span style="font-size:1rem;">ms</span>
-        </div>
-        <div class="lbl">Avg Per Image</div>
+        <div class="val" style="color:#F59E0B;">{avg_t :.0f}<span style="font-size:.85rem">ms</span></div>
+        <div class="lbl">Avg / Image</div>
       </div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""",unsafe_allow_html =True )
 
-    # ── ZIP Download ──────────────────────────────────────────────────────────
-    st.markdown('<div class="ir-card ir-card-accent-green" style="margin-top:1rem;">',
-                unsafe_allow_html=True)
-    st.download_button(
-        label=f"⬇  Download All Results ({ok_count} images + JSONs) — ZIP",
-        data=zip_buffer.getvalue(),
-        file_name="ir_pipeline_results.zip",
-        mime="application/zip",
-        use_container_width=True,
+    st .markdown ('<div class="card card-green" style="margin-top:.8rem;">',
+    unsafe_allow_html =True )
+    st .download_button (
+    f"⬇  Download all ({ok_n } enhanced images + JSONs) — ZIP",
+    data =zip_buf .getvalue (),
+    file_name ="ir_pipeline_results.zip",
+    mime ="application/zip",
+    use_container_width =True ,
     )
-    st.markdown("ZIP contains: `enhanced/` folder (images) + `detections/` folder (JSONs)",
-                unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st .markdown ("</div>",unsafe_allow_html =True )
 
-    # Error list
-    if err_count > 0:
-        with st.expander(f"⚠ {err_count} errors"):
-            for fname, _, err in batch_results:
-                if err:
-                    st.markdown(f"- **{fname}**: `{err}`")
+    if err_n :
+        with st .expander (f"⚠ {err_n } errors"):
+            for fname ,_ ,err in batch :
+                if err :
+                    st .markdown (f"- **{fname }**: `{err }`")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — ABOUT / PIPELINE INFO
-# ══════════════════════════════════════════════════════════════════════════════
-def tab_about():
-    st.markdown("""
-    <div class="ir-card ir-card-accent-cyan">
-      <p style="font-size:1rem;font-weight:700;color:#00D4FF;margin-bottom:6px;">
-        AI-Enhanced Cooled Sensor IR Imaging Pipeline
+def tab_about ():
+    st .markdown ("""
+    <div class="card card-cyan">
+      <p style="font-size:.95rem;font-weight:700;color:#00D4FF;margin-bottom:5px;">
+        AI-Enhanced Cooled Sensor IR Imaging Pipeline — v2.0
       </p>
-      <p style="font-size:0.85rem;color:#94A3B8;margin:0;">
-        5-stage automated image intelligence system. Fully self-hosted.
-        Works on any image — thermal, grayscale, RGB. No cloud dependency.
+      <p style="font-size:.82rem;color:#94A3B8;margin:0;">
+        5-stage pipeline. DRDO SSPL. Self-hosted. Any image type.
       </p>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""",unsafe_allow_html =True )
 
-    stages = [
-        ("01", "#00D4FF", "Sensor Calibration",
-         "Dark current · Flat field · Gain/offset · Temperature mapping · Linearity LUT",
-         "Auto-estimates calibration from frame statistics if no pre-computed files exist"),
-        ("02", "#3B82F6", "Deterministic Processing",
-         "Bad pixel correction · NUC · Background subtraction · Kalman filtering · Wavelet denoising",
-         "All algorithms are parameter-free. Self-tuning threshold estimation via MAD estimator"),
-        ("03", "#8B5CF6", "ML Pre-processing",
-         "Non-local means denoising · CLAHE contrast · Adaptive gamma · Unsharp masking",
-         "Auto-detects noise level and adjusts denoising strength — works on any image type"),
-        ("04", "#8B5CF6", "DL Enhancement",
-         "Inpainting dead pixels · Optional EDSR super-resolution ×2",
-         "EDSR uses pre-trained COCO weights — no fine-tuning required"),
-        ("05", "#F59E0B", "Object Detection & Tracking",
-         "YOLOv8-nano (80 COCO classes) + Thermal hotspot detector (5 IR classes)",
-         "85 total detectable classes. Centroid tracker assigns persistent IDs across frames"),
-    ]
-
-    for num, color, title, algos, note in stages:
-        st.markdown(f"""
-        <div class="ir-card" style="border-left:3px solid {color};border-radius:10px;
-                                    padding:12px 16px;margin-bottom:8px;">
-          <div style="display:flex;gap:10px;align-items:flex-start;">
-            <div style="font-size:1.2rem;font-weight:800;color:{color};
-                        min-width:28px;font-family:monospace;">{num}</div>
-            <div>
-              <div style="font-size:0.95rem;font-weight:700;color:#F1F5F9;
-                          margin-bottom:4px;">{title}</div>
-              <div style="font-size:0.8rem;color:#64748B;margin-bottom:5px;">{algos}</div>
-              <div style="font-size:0.78rem;color:{color};opacity:.8;">✦ {note}</div>
-            </div>
+    for num ,col ,title ,detail in [
+    ("01","#00D4FF","Calibration","Dark current · Flat field · Gain/offset · Auto-estimates if files missing"),
+    ("02","#3B82F6","Deterministic","Bad pixel fix · NUC · Kalman filter · Wavelet denoise"),
+    ("03","#8B5CF6","Enhancement","Bilateral denoise → Gamma → CLAHE → Unsharp mask (1.8×) → Laplacian boost"),
+    ("04","#8B5CF6","DL / SR","Dead pixel inpaint · Optional EDSR ×2 super-resolution"),
+    ("05","#F59E0B","Detection","YOLOv8n COCO → 8 display groups · Centroid tracker · Optional thermal"),
+    ]:
+        st .markdown (f"""
+        <div style="background:#0F1623;border:1px solid #1A2A40;border-left:3px solid {col };
+                    border-radius:10px;padding:11px 15px;margin-bottom:7px;display:flex;gap:10px;">
+          <div style="font-size:1.1rem;font-weight:800;color:{col };
+                      font-family:monospace;min-width:24px;">{num }</div>
+          <div>
+            <div style="font-size:.9rem;font-weight:700;color:#F1F5F9;">{title }</div>
+            <div style="font-size:.78rem;color:#475569;margin-top:3px;">{detail }</div>
           </div>
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""",unsafe_allow_html =True )
 
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        <div class="ir-card ir-card-accent-green">
-          <p style="font-size:0.75rem;font-weight:700;color:#10B981;
-                    letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">
-            DETECTABLE CLASSES
+    st .markdown ("---")
+    c1 ,c2 =st .columns (2 )
+    with c1 :
+        st .markdown ("""
+        <div class="card card-green">
+          <p style="font-size:.73rem;font-weight:700;color:#22C55E;
+                    letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">
+            DISPLAY CLASSES (8)
           </p>
-          <p style="font-size:0.8rem;color:#94A3B8;line-height:1.7;">
-            person · car · truck · bus · motorcycle · bicycle · airplane ·
-            train · boat · traffic light · fire hydrant · stop sign · cat ·
-            dog · bird · horse · cow · elephant · bear · zebra · giraffe ·
-            <em>+59 more COCO classes</em><br><br>
-            <span style="color:#EF4444;">Thermal-specific:</span>
-            hotspot · fire · heat_source · anomaly · cold_region
+          <p style="font-size:.82rem;color:#94A3B8;line-height:1.9;">
+            👤 Person &nbsp;🚗 Vehicle &nbsp;🏍 Motorcycle<br>
+            🚲 Bicycle &nbsp;✈️ Aircraft &nbsp;🚢 Watercraft<br>
+            🐕 Animal &nbsp;💻 Screen<br>
+            <span style="color:#EF4444;">+ Hotspot</span> (thermal detector, opt-in)
           </p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-        <div class="ir-card ir-card-accent-purp">
-          <p style="font-size:0.75rem;font-weight:700;color:#8B5CF6;
-                    letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">
-            ACCEPTED INPUT FORMATS
+        </div>""",unsafe_allow_html =True )
+    with c2 :
+        st .markdown ("""
+        <div class="card card-yell">
+          <p style="font-size:.73rem;font-weight:700;color:#F59E0B;
+                    letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">
+            INPUT FORMATS
           </p>
-          <p style="font-size:0.8rem;color:#94A3B8;line-height:1.9;">
-            🌡 <strong>.tiff / .tif</strong> — 16-bit thermal sensor output<br>
-            🔢 <strong>.npy</strong> — NumPy float32 arrays<br>
-            🖼 <strong>.png</strong> — 8/16-bit lossless<br>
-            📷 <strong>.jpg / .jpeg</strong> — standard photos<br>
-            🗂 <strong>.bmp</strong> — uncompressed bitmap<br>
-            ⚙️ <strong>.raw / .bin</strong> — binary sensor dumps (via API)
+          <p style="font-size:.82rem;color:#94A3B8;line-height:1.9;">
+            🌡 TIFF / TIF — 16-bit thermal<br>
+            🔢 NPY — NumPy float32<br>
+            🖼 PNG — 8/16-bit lossless<br>
+            📷 JPG / JPEG — standard<br>
+            🗂 BMP — uncompressed
           </p>
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""",unsafe_allow_html =True )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════════════════
-def main():
-    # Load pipeline (cached)
-    with st.spinner("Loading pipeline..."):
-        pl = load_pipeline()
 
-    # Sidebar settings
-    settings = render_sidebar(pl)
 
-    # Header
-    st.markdown("""
-    <div class="header-banner">
+
+def main ():
+    with st .spinner ("Loading pipeline…"):
+        pl =load_pipeline ()
+
+    s =sidebar (pl )
+
+    st .markdown ("""
+    <div class="header">
       <div>
-        <div class="header-title">🌡️ AI-ENHANCED IR IMAGING PIPELINE</div>
-        <div class="header-sub">
-          DRDO SSPL · ML + DL + MLOps · 85 Object Classes · Any Image Type
-        </div>
+        <div class="htitle">🌡️ AI-ENHANCED IR IMAGING PIPELINE</div>
+        <div class="hsub">DRDO SSPL · ML + DL + MLOps · Self-hosted</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <span class="badge badge-cyan">YOLOv8</span>
-        <span class="badge badge-purp">U-Net</span>
-        <span class="badge badge-green">COCO 80+</span>
-        <span class="badge badge-yell">Wavelet</span>
-        <span class="badge badge-red">Thermal</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <span class="badge bc">YOLOv8</span>
+        <span class="badge bg">8 Clean Classes</span>
+        <span class="badge by">Wavelet</span>
+        <span class="badge br">CLAHE 3×</span>
       </div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""",unsafe_allow_html =True )
 
-    # Tabs
-    tab1, tab2, tab3 = st.tabs([
-        "   🖼  Single Image   ",
-        "   📁  Batch Upload   ",
-        "   ℹ️  Pipeline Info   ",
+    t1 ,t2 ,t3 =st .tabs ([
+    "   🖼  Single Image   ",
+    "   📁  Batch Upload   ",
+    "   ℹ️  About   ",
     ])
-
-    with tab1:
-        tab_single(pl, settings)
-
-    with tab2:
-        tab_batch(pl, settings)
-
-    with tab3:
-        tab_about()
+    with t1 :tab_single (pl ,s )
+    with t2 :tab_batch (pl ,s )
+    with t3 :tab_about ()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ =="__main__":
+    main ()
